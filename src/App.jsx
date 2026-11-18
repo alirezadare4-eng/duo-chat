@@ -40,7 +40,9 @@ import {
   sendCloudTyping, 
   sendCloudMemory, 
   sendCloudPlaylist,
-  sendCloudDelete 
+  sendCloudDelete,
+  sendCloudSeen,
+  sendCloudPresence 
 } from './cloudSync';
 import { compressImage, generateMessageId, formatSeconds } from './utils';
 import { getAllFromStore, saveToStore, deleteFromStore, clearStore } from './db';
@@ -105,9 +107,53 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [cloudOnline, setCloudOnline] = useState(false);
 
-  // Live Partner Typing Status
+  // Live Partner Typing & Presence Status
   const [partnerIsTyping, setPartnerIsTyping] = useState(false);
   const typingTimeoutRef = useRef(null);
+
+  const [partnerOnline, setPartnerOnline] = useState(false);
+  const [partnerLastSeen, setPartnerLastSeen] = useState(() => {
+    const saved = localStorage.getItem('duo_partner_last_seen');
+    return saved ? Number(saved) : null;
+  });
+  const presenceTimeoutRef = useRef(null);
+
+  const formatLastSeen = (timestamp) => {
+    if (!timestamp) return 'آفلاین';
+    const now = Date.now();
+    const diffSec = Math.floor((now - timestamp) / 1000);
+
+    if (diffSec < 60) return 'آخرین بازدید: لحظاتی پیش';
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `آخرین بازدید: ${diffMin} دقیقه پیش`;
+
+    const d = new Date(timestamp);
+    const today = new Date();
+    const isToday = d.getDate() === today.getDate() && 
+                    d.getMonth() === today.getMonth() && 
+                    d.getFullYear() === today.getFullYear();
+
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+
+    if (isToday) {
+      return `آخرین بازدید: امروز ساعت ${hours}:${minutes}`;
+    }
+
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    const isYesterday = d.getDate() === yesterday.getDate() && 
+                        d.getMonth() === yesterday.getMonth() && 
+                        d.getFullYear() === yesterday.getFullYear();
+
+    if (isYesterday) {
+      return `آخرین بازدید: دیروز ساعت ${hours}:${minutes}`;
+    }
+
+    const month = d.getMonth() + 1;
+    const day = d.getDate();
+    return `آخرین بازدید: ${month}/${day} ساعت ${hours}:${minutes}`;
+  };
 
   // Chat Audio Playback
   const [activeAudioId, setActiveAudioId] = useState(null);
@@ -266,17 +312,40 @@ export default function App() {
       },
       onMessage: (msg) => {
         if (msg.sender !== user) {
+          // Partner is actively messaging
+          setPartnerOnline(true);
+          const nowTs = Date.now();
+          setPartnerLastSeen(nowTs);
+          localStorage.setItem('duo_partner_last_seen', nowTs);
+          if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
+          presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 20000);
+
+          const isChatActive = activeTab === 'chat' && document.visibilityState === 'visible';
+          const msgToStore = isChatActive ? { ...msg, seen: true } : { ...msg, seen: false };
+
           setMessages((prev) => {
             if (prev.some((m) => m.id === msg.id)) return prev;
-            saveToStore('messages', msg);
-            return [...prev, msg];
+            saveToStore('messages', msgToStore);
+            return [...prev, msgToStore];
           });
+
+          if (isChatActive) {
+            sendCloudSeen({ reader: user, messageIds: [msg.id], timestamp: nowTs });
+          }
+
           playChime();
           if ('vibrate' in navigator) navigator.vibrate(200);
         }
       },
       onNudge: ({ sender }) => {
         if (sender !== user) {
+          setPartnerOnline(true);
+          const nowTs = Date.now();
+          setPartnerLastSeen(nowTs);
+          localStorage.setItem('duo_partner_last_seen', nowTs);
+          if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
+          presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 20000);
+
           setNudgeAlert(`${sender === 'alireza' ? 'علیرضا' : 'فاطمه'} برات تپش قلب فرستاد! 💓`);
           setShowHeartBurst(true);
           playChime();
@@ -288,6 +357,13 @@ export default function App() {
       onTyping: ({ sender }) => {
         if (sender !== user) {
           setPartnerIsTyping(true);
+          setPartnerOnline(true);
+          const nowTs = Date.now();
+          setPartnerLastSeen(nowTs);
+          localStorage.setItem('duo_partner_last_seen', nowTs);
+          if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
+          presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 20000);
+
           if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
           typingTimeoutRef.current = setTimeout(() => {
             setPartnerIsTyping(false);
@@ -331,6 +407,46 @@ export default function App() {
               return m;
             })
           );
+        }
+      },
+      onSeen: ({ reader, messageIds, timestamp }) => {
+        if (reader !== user) {
+          // Partner has seen our messages! Update from single tick to double tick
+          setMessages((prev) => 
+            prev.map((m) => {
+              if (m.sender === user && (messageIds === 'all' || (Array.isArray(messageIds) && messageIds.includes(m.id)))) {
+                const updated = { ...m, seen: true };
+                saveToStore('messages', updated);
+                return updated;
+              }
+              return m;
+            })
+          );
+
+          // Update partner presence
+          setPartnerOnline(true);
+          const nowTs = timestamp || Date.now();
+          setPartnerLastSeen(nowTs);
+          localStorage.setItem('duo_partner_last_seen', nowTs);
+          if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
+          presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 20000);
+        }
+      },
+      onPresence: ({ user: fromUser, status, timestamp }) => {
+        if (fromUser !== user) {
+          const nowTs = timestamp || Date.now();
+          if (status === 'online') {
+            setPartnerOnline(true);
+            setPartnerLastSeen(nowTs);
+            localStorage.setItem('duo_partner_last_seen', nowTs);
+            if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
+            presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 20000);
+          } else {
+            setPartnerOnline(false);
+            setPartnerLastSeen(nowTs);
+            localStorage.setItem('duo_partner_last_seen', nowTs);
+            if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
+          }
         }
       }
     });
@@ -413,6 +529,7 @@ export default function App() {
       text: textToSend,
       time: timeStr,
       type,
+      seen: false, // Single tick until partner sees it
       ...(replyData ? { replyTo: replyData } : {}),
       ...meta
     };
@@ -425,6 +542,62 @@ export default function App() {
     sendCloudMessage(newMsg);
     socket.emit('send_message', newMsg);
   };
+
+  const markIncomingAsSeen = () => {
+    if (activeTab !== 'chat' || document.visibilityState !== 'visible' || !user) return;
+    setMessages((prev) => {
+      const unread = prev.filter((m) => m.sender !== user && !m.seen);
+      if (unread.length === 0) return prev;
+
+      const unreadIds = unread.map((m) => m.id);
+      sendCloudSeen({ reader: user, messageIds: unreadIds, timestamp: Date.now() });
+
+      return prev.map((m) => {
+        if (unreadIds.includes(m.id)) {
+          const updated = { ...m, seen: true };
+          saveToStore('messages', updated);
+          return updated;
+        }
+        return m;
+      });
+    });
+  };
+
+  // Heartbeat & Presence Lifecycle
+  useEffect(() => {
+    if (!user) return;
+
+    sendCloudPresence({ user, status: 'online', timestamp: Date.now() });
+    markIncomingAsSeen();
+
+    const handleVis = () => {
+      if (document.visibilityState === 'visible') {
+        sendCloudPresence({ user, status: 'online', timestamp: Date.now() });
+        markIncomingAsSeen();
+      } else {
+        sendCloudPresence({ user, status: 'offline', timestamp: Date.now() });
+      }
+    };
+
+    const handleUnload = () => {
+      sendCloudPresence({ user, status: 'offline', timestamp: Date.now() });
+    };
+
+    document.addEventListener('visibilitychange', handleVis);
+    window.addEventListener('beforeunload', handleUnload);
+
+    const hbInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        sendCloudPresence({ user, status: 'online', timestamp: Date.now() });
+      }
+    }, 7000);
+
+    return () => {
+      clearInterval(hbInterval);
+      document.removeEventListener('visibilitychange', handleVis);
+      window.removeEventListener('beforeunload', handleUnload);
+    };
+  }, [user, activeTab]);
 
   // Long-press detection for touch devices
   const handleMessageTouchStart = (msg) => {
@@ -921,7 +1094,7 @@ export default function App() {
                   <div className={`relative w-11 h-11 rounded-2xl bg-gradient-to-br ${user === 'alireza' ? 'from-rose-500 to-pink-600' : 'from-blue-500 to-indigo-600'} flex items-center justify-center font-bold text-lg text-white shadow-lg border border-white/20`}>
                     {partnerInitial}
                   </div>
-                  <span className="absolute -bottom-0.5 -left-0.5 w-3 h-3 bg-emerald-400 border-2 border-[#0d0915] rounded-full shadow"></span>
+                  <span className={`absolute -bottom-0.5 -left-0.5 w-3.5 h-3.5 border-2 border-[#0d0915] rounded-full shadow ${partnerOnline ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-500'}`}></span>
                 </div>
 
                 <div>
@@ -939,10 +1112,15 @@ export default function App() {
                         <span className="w-1 h-1 rounded-full bg-pink-400 animate-bounce [animation-delay:0.4s]"></span>
                       </span>
                     </div>
+                  ) : partnerOnline ? (
+                    <p className="text-[10px] text-emerald-400 mt-0.5 font-medium flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+                      <span>آنلاین</span>
+                    </p>
                   ) : (
-                    <p className="text-[10px] text-emerald-400/90 mt-0.5 font-light flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                      <span>آنلاین • پیام‌رسانی امن</span>
+                    <p className="text-[10px] text-white/50 mt-0.5 font-light flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-neutral-500"></span>
+                      <span>{formatLastSeen(partnerLastSeen)}</span>
                     </p>
                   )}
                 </div>
@@ -1106,7 +1284,13 @@ export default function App() {
                           </button>
                           <div className="flex items-center gap-1">
                             <span>{m.time}</span>
-                            {isMe && <span className="font-bold">✓✓</span>}
+                            {isMe && (
+                              m.seen ? (
+                                <span className="text-sky-300 font-bold text-[10px] tracking-tighter" title="خوانده شده">✓✓</span>
+                              ) : (
+                                <span className="text-white/40 text-[10px]" title="ارسال شده (هنوز خوانده نشده)">✓</span>
+                              )
+                            )}
                           </div>
                         </div>
                       </div>

@@ -80,6 +80,14 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('delete_message', data);
   });
 
+  socket.on('send_seen', (data) => {
+    socket.broadcast.emit('receive_seen', data);
+  });
+
+  socket.on('send_presence', (data) => {
+    socket.broadcast.emit('receive_presence', data);
+  });
+
   socket.on('disconnect', () => {
     const userId = onlineUsers.get(socket.id);
     onlineUsers.delete(socket.id);

@@ -8,6 +8,8 @@ const TOPIC_TYPING = `${ROOM_CHANNEL}/typing`;
 const TOPIC_MEMORY = `${ROOM_CHANNEL}/memory`;
 const TOPIC_PLAYLIST = `${ROOM_CHANNEL}/playlist`;
 const TOPIC_DELETE = `${ROOM_CHANNEL}/delete`;
+const TOPIC_SEEN = `${ROOM_CHANNEL}/seen`;
+const TOPIC_PRESENCE = `${ROOM_CHANNEL}/presence`;
 
 const BROKERS = [
   'wss://broker.emqx.io:8084/mqtt',
@@ -18,7 +20,17 @@ let client = null;
 let currentBrokerIdx = 0;
 let isConnecting = false;
 
-export function initCloudSync({ onMessage, onNudge, onTyping, onMemory, onPlaylist, onDeleteMessage, onStatusChange }) {
+export function initCloudSync({ 
+  onMessage, 
+  onNudge, 
+  onTyping, 
+  onMemory, 
+  onPlaylist, 
+  onDeleteMessage, 
+  onSeen,
+  onPresence,
+  onStatusChange 
+}) {
   if (client && client.connected) {
     if (onStatusChange) onStatusChange(true);
     return client;
@@ -56,7 +68,9 @@ export function initCloudSync({ onMessage, onNudge, onTyping, onMemory, onPlayli
           TOPIC_TYPING,
           TOPIC_MEMORY,
           TOPIC_PLAYLIST,
-          TOPIC_DELETE
+          TOPIC_DELETE,
+          TOPIC_SEEN,
+          TOPIC_PRESENCE
         ], (err) => {
           if (err) console.error('Sub error:', err);
         });
@@ -77,6 +91,10 @@ export function initCloudSync({ onMessage, onNudge, onTyping, onMemory, onPlayli
             onPlaylist(data);
           } else if (topic === TOPIC_DELETE && onDeleteMessage) {
             onDeleteMessage(data);
+          } else if (topic === TOPIC_SEEN && onSeen) {
+            onSeen(data);
+          } else if (topic === TOPIC_PRESENCE && onPresence) {
+            onPresence(data);
           }
         } catch (e) {
           console.error('MQTT parse error:', e);
@@ -141,5 +159,17 @@ export function sendCloudDelete(messageIdOrData) {
   if (client && client.connected) {
     const payload = typeof messageIdOrData === 'object' ? messageIdOrData : { id: messageIdOrData };
     client.publish(TOPIC_DELETE, JSON.stringify(payload), { qos: 1 });
+  }
+}
+
+export function sendCloudSeen(seenData) {
+  if (client && client.connected) {
+    client.publish(TOPIC_SEEN, JSON.stringify(seenData), { qos: 1 });
+  }
+}
+
+export function sendCloudPresence(presenceData) {
+  if (client && client.connected) {
+    client.publish(TOPIC_PRESENCE, JSON.stringify(presenceData), { qos: 0 });
   }
 }
