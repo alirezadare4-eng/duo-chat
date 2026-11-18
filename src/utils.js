@@ -40,3 +40,4 @@ export function formatSeconds(secs) {
   const s = Math.floor(secs % 60);
   return `${m}:${s < 10 ? '0' : ''}${s}`;
 }
+

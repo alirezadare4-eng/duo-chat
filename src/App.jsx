@@ -4,7 +4,6 @@ import {
   Heart, 
   Send, 
   Mic, 
-  Square, 
   Image as ImageIcon, 
   Palette, 
   Play, 
@@ -19,10 +18,26 @@ import {
   Phone, 
   LogOut, 
   Calendar,
-  Trash2
+  Trash2,
+  MessageCircle,
+  BookHeart,
+  Music,
+  Plus,
+  SkipForward,
+  SkipBack,
+  Volume2,
+  Film
 } from 'lucide-react';
-import { initCloudSync, sendCloudMessage, sendCloudNudge, sendCloudTyping } from './cloudSync';
+import { 
+  initCloudSync, 
+  sendCloudMessage, 
+  sendCloudNudge, 
+  sendCloudTyping,
+  sendCloudMemory,
+  sendCloudPlaylist
+} from './cloudSync';
 import { compressImage, generateMessageId, formatSeconds } from './utils';
+import { getAllFromStore, saveToStore, deleteFromStore, clearStore } from './db';
 
 const isLocal = typeof window !== 'undefined' && 
   (window.location.hostname === 'localhost' || window.location.hostname.startsWith('192.168.'));
@@ -53,6 +68,9 @@ const FONTS = [
 ];
 
 export default function App() {
+  // Navigation Tabs: 'chat' | 'memories' | 'playlist'
+  const [activeTab, setActiveTab] = useState('chat');
+
   // Authentication
   const [myPhone, setMyPhone] = useState(() => localStorage.getItem('duo_my_phone') || '');
   const [user, setUser] = useState(() => localStorage.getItem('duo_user') || '');
@@ -77,7 +95,7 @@ export default function App() {
   const [partnerIsTyping, setPartnerIsTyping] = useState(false);
   const typingTimeoutRef = useRef(null);
 
-  // Audio Playback Manager
+  // Chat Audio Playback
   const [activeAudioId, setActiveAudioId] = useState(null);
   const [audioProgress, setAudioProgress] = useState(0);
   const currentAudioRef = useRef(null);
@@ -87,17 +105,25 @@ export default function App() {
   const [recordSeconds, setRecordSeconds] = useState(0);
   const recordIntervalRef = useRef(null);
 
-  // Messages state
-  const [messages, setMessages] = useState(() => {
-    const saved = localStorage.getItem('duo_messages');
-    if (saved) {
-      try { 
-        const parsed = JSON.parse(saved);
-        return parsed.filter(m => m.id !== '1' && m.id !== '2');
-      } catch (e) {}
-    }
-    return [];
-  });
+  // Messages (IndexedDB)
+  const [messages, setMessages] = useState([]);
+
+  // Memories Diary State (IndexedDB)
+  const [memories, setMemories] = useState([]);
+  const [showAddMemory, setShowAddMemory] = useState(false);
+  const [newMemTitle, setNewMemTitle] = useState('');
+  const [newMemDate, setNewMemDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [newMemDesc, setNewMemDesc] = useState('');
+  const [newMemMedia, setNewMemMedia] = useState(null);
+  const [newMemMediaType, setNewMemMediaType] = useState('image');
+
+  // Couple's Playlist State (IndexedDB)
+  const [playlist, setPlaylist] = useState([]);
+  const [currentTrackIdx, setCurrentTrackIdx] = useState(0);
+  const [isPlayingMusic, setIsPlayingMusic] = useState(false);
+  const [musicProgress, setMusicProgress] = useState(0);
+  const [musicDuration, setMusicDuration] = useState(0);
+  const musicAudioRef = useRef(null);
 
   const [inputVal, setInputVal] = useState('');
   const [nudgeAlert, setNudgeAlert] = useState(null);
@@ -108,6 +134,8 @@ export default function App() {
   const audioChunksRef = useRef([]);
   const fileInputRef = useRef(null);
   const bgInputRef = useRef(null);
+  const memoryMediaInputRef = useRef(null);
+  const songInputRef = useRef(null);
   const audioContextRef = useRef(null);
 
   const playChime = () => {
@@ -132,11 +160,36 @@ export default function App() {
     } catch (e) {}
   };
 
-  // Sync messages
+  // Load initial data from IndexedDB
   useEffect(() => {
-    localStorage.setItem('duo_messages', JSON.stringify(messages));
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    getAllFromStore('messages').then((items) => setMessages(items || []));
+    getAllFromStore('memories').then((items) => setMemories(items || []));
+    getAllFromStore('playlist').then((items) => {
+      if (items && items.length > 0) {
+        setPlaylist(items);
+      } else {
+        // Sample starter playlist if empty
+        const defaultTracks = [
+          {
+            id: 'sample_1',
+            title: 'بارون',
+            artist: 'شادمهر عقیلی',
+            src: 'https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3?filename=romantic-piano-112199.mp3',
+            addedBy: 'علیرضا'
+          },
+          {
+            id: 'sample_2',
+            title: 'نفس',
+            artist: 'موزیک عاشقانه ما',
+            src: 'https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8c8a73467.mp3?filename=gentle-acoustic-guitar-110241.mp3',
+            addedBy: 'فاطمه'
+          }
+        ];
+        setPlaylist(defaultTracks);
+        defaultTracks.forEach((t) => saveToStore('playlist', t));
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (user) {
@@ -185,6 +238,7 @@ export default function App() {
         if (msg.sender !== user) {
           setMessages((prev) => {
             if (prev.some((m) => m.id === msg.id)) return prev;
+            saveToStore('messages', msg);
             return [...prev, msg];
           });
           playChime();
@@ -209,6 +263,26 @@ export default function App() {
             setPartnerIsTyping(false);
           }, 3000);
         }
+      },
+      onMemory: (mem) => {
+        setMemories((prev) => {
+          if (prev.some((m) => m.id === mem.id)) return prev;
+          saveToStore('memories', mem);
+          return [mem, ...prev];
+        });
+        playChime();
+        setNudgeAlert(`یک خاطره جدید دونفره ثبت شد! 📖✨`);
+        setTimeout(() => setNudgeAlert(null), 3500);
+      },
+      onPlaylist: (track) => {
+        setPlaylist((prev) => {
+          if (prev.some((t) => t.id === track.id)) return prev;
+          saveToStore('playlist', track);
+          return [...prev, track];
+        });
+        playChime();
+        setNudgeAlert(`آهنگ «${track.title}» به پلی‌لیست مشترک اضافه شد! 🎵`);
+        setTimeout(() => setNudgeAlert(null), 3500);
       }
     });
   }, [user]);
@@ -263,7 +337,7 @@ export default function App() {
     sendCloudTyping(user);
   };
 
-  const sendMessage = (type = 'text', content = '') => {
+  const sendMessage = async (type = 'text', content = '') => {
     const textToSend = content || inputVal.trim();
     if (!textToSend && type === 'text') return;
 
@@ -279,6 +353,7 @@ export default function App() {
     };
 
     setMessages((prev) => [...prev, newMsg]);
+    await saveToStore('messages', newMsg);
     if (type === 'text') setInputVal('');
 
     sendCloudMessage(newMsg);
@@ -297,7 +372,7 @@ export default function App() {
     setTimeout(() => setNudgeAlert(null), 3500);
   };
 
-  // Safe Voice Recording with Timer
+  // Safe Voice Recording
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -329,7 +404,7 @@ export default function App() {
         setRecordSeconds((s) => s + 1);
       }, 1000);
     } catch (err) {
-      alert('دسترسی به میکروفون داده نشد یا مسدود است.');
+      alert('دسترسی به میکروفون داده نشد.');
     }
   };
 
@@ -339,7 +414,6 @@ export default function App() {
       if (shouldSend) {
         mediaRecorderRef.current.stop();
       } else {
-        // Cancel recording
         mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
       }
       setIsRecording(false);
@@ -347,7 +421,7 @@ export default function App() {
     }
   };
 
-  // Compressed Image Upload (handles 20MB photos smoothly)
+  // Compressed Image Upload
   const handleImageUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -355,7 +429,7 @@ export default function App() {
       const compressedBase64 = await compressImage(file, 1000, 0.72);
       sendMessage('image', compressedBase64);
     } catch (err) {
-      alert('خطا در بارگذاری تصویر. لطفا تصویر دیگری انتخاب کنید.');
+      alert('خطا در بارگذاری تصویر.');
     }
     e.target.value = '';
   };
@@ -372,7 +446,7 @@ export default function App() {
     e.target.value = '';
   };
 
-  // Audio Playback Manager (only 1 plays at a time, supports pause)
+  // Chat Audio Player
   const toggleAudio = (msgId, audioSrc) => {
     if (activeAudioId === msgId && currentAudioRef.current) {
       if (!currentAudioRef.current.paused) {
@@ -402,15 +476,115 @@ export default function App() {
       setAudioProgress(0);
     };
 
-    audio.play().catch(() => {
-      setActiveAudioId(null);
-    });
+    audio.play().catch(() => setActiveAudioId(null));
   };
 
-  const clearAllMessages = () => {
+  // Memory Creation
+  const handleSaveMemory = async (e) => {
+    e.preventDefault();
+    if (!newMemTitle.trim()) {
+      alert('لطفاً عنوان خاطره را وارد کنید.');
+      return;
+    }
+
+    const memItem = {
+      id: generateMessageId(),
+      title: newMemTitle.trim(),
+      date: newMemDate,
+      desc: newMemDesc.trim(),
+      media: newMemMedia,
+      mediaType: newMemMediaType,
+      createdBy: user,
+      createdAt: new Date().toISOString()
+    };
+
+    setMemories((prev) => [memItem, ...prev]);
+    await saveToStore('memories', memItem);
+    sendCloudMemory(memItem);
+
+    // Reset form
+    setNewMemTitle('');
+    setNewMemDesc('');
+    setNewMemMedia(null);
+    setShowAddMemory(false);
+  };
+
+  const handleMemoryMediaSelect = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (file.type.startsWith('video/')) {
+      // For video
+      const reader = new FileReader();
+      reader.onload = () => {
+        setNewMemMedia(reader.result);
+        setNewMemMediaType('video');
+      };
+      reader.readAsDataURL(file);
+    } else {
+      // For image
+      try {
+        const compressed = await compressImage(file, 1200, 0.75);
+        setNewMemMedia(compressed);
+        setNewMemMediaType('image');
+      } catch (e) {}
+    }
+  };
+
+  // Playlist Music Player Logic
+  const currentTrack = playlist[currentTrackIdx] || null;
+
+  const toggleMusicPlay = () => {
+    if (!musicAudioRef.current) return;
+    if (isPlayingMusic) {
+      musicAudioRef.current.pause();
+      setIsPlayingMusic(false);
+    } else {
+      musicAudioRef.current.play().then(() => setIsPlayingMusic(true)).catch(console.error);
+    }
+  };
+
+  const changeTrack = (direction) => {
+    if (playlist.length === 0) return;
+    let nextIdx = currentTrackIdx + direction;
+    if (nextIdx < 0) nextIdx = playlist.length - 1;
+    if (nextIdx >= playlist.length) nextIdx = 0;
+    setCurrentTrackIdx(nextIdx);
+    setIsPlayingMusic(false);
+    setTimeout(() => {
+      if (musicAudioRef.current) {
+        musicAudioRef.current.play().then(() => setIsPlayingMusic(true)).catch(console.error);
+      }
+    }, 150);
+  };
+
+  const handleAddSongFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const title = file.name.replace(/\.[^/.]+$/, '');
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const newTrack = {
+        id: generateMessageId(),
+        title: title,
+        artist: user === 'alireza' ? 'انتخاب علیرضا' : 'انتخاب فاطمه',
+        src: reader.result,
+        addedBy: user === 'alireza' ? 'علیرضا' : 'فاطمه'
+      };
+
+      setPlaylist((prev) => [...prev, newTrack]);
+      await saveToStore('playlist', newTrack);
+      sendCloudPlaylist(newTrack);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const clearAllMessages = async () => {
     if (confirm('آیا مطمئن هستید که می‌خواهید تمام پیام‌ها را پاک کنید؟')) {
       setMessages([]);
-      localStorage.removeItem('duo_messages');
+      await clearStore('messages');
       setShowSettings(false);
     }
   };
@@ -427,7 +601,6 @@ export default function App() {
         style={{ backgroundColor: currentTheme.bg }}
       >
         <div className="relative w-full max-w-[390px] rounded-[36px] bg-[#120a1f]/90 border border-white/15 p-6 backdrop-blur-2xl shadow-2xl flex flex-col items-center text-center">
-          
           <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-pink-500 via-rose-500 to-purple-600 flex items-center justify-center text-3xl shadow-xl border border-white/20 mb-4 animate-bounce">
             🔐
           </div>
@@ -436,7 +609,6 @@ export default function App() {
           <p className="text-xs text-pink-200/80 mb-6">فضای کاملاً خصوصی و رمزشده دونفره</p>
 
           <form onSubmit={handleLogin} className="w-full space-y-4">
-            
             <div className="bg-black/40 p-1.5 rounded-2xl border border-white/10 flex items-center gap-1">
               <button
                 type="button"
@@ -485,14 +657,13 @@ export default function App() {
             <ShieldCheck className="w-3.5 h-3.5" />
             <span>رمزنگاری اختصاصی • بدون واسطه و بدون ردپا</span>
           </div>
-
         </div>
       </div>
     );
   }
 
   // ----------------------------------------------------
-  // MAIN REAL ANDROID CHAT SCREEN
+  // MAIN APP SCREEN (WITH BOTTOM TABS)
   // ----------------------------------------------------
   return (
     <div 
@@ -557,146 +728,587 @@ export default function App() {
           </div>
         </div>
 
-        {/* Real Profile Card Header */}
-        <div className="relative z-20 px-4 py-2.5 mx-3 mt-1 rounded-2xl glass-panel flex items-center justify-between shadow-xl">
-          <div className="flex items-center gap-3">
-            <div className="relative cursor-pointer" onClick={() => setShowHeartBurst(true)}>
-              <div className="absolute -inset-1 rounded-2xl bg-gradient-to-tr from-pink-500 via-rose-500 to-purple-600 opacity-75 blur-[4px] animate-pulse"></div>
-              <div className={`relative w-11 h-11 rounded-2xl bg-gradient-to-br ${user === 'alireza' ? 'from-rose-500 to-pink-600' : 'from-blue-500 to-indigo-600'} flex items-center justify-center font-bold text-lg text-white shadow-lg border border-white/20`}>
-                {partnerInitial}
+        {/* ---------------------------------------------------- */}
+        {/* TAB 1: CHAT SCREEN */}
+        {/* ---------------------------------------------------- */}
+        {activeTab === 'chat' && (
+          <div className="flex-1 flex flex-col overflow-hidden relative z-10">
+            
+            {/* Real Profile Card Header */}
+            <div className="px-4 py-2 mx-3 mt-1 rounded-2xl glass-panel flex items-center justify-between shadow-xl">
+              <div className="flex items-center gap-3">
+                <div className="relative cursor-pointer" onClick={() => setShowHeartBurst(true)}>
+                  <div className="absolute -inset-1 rounded-2xl bg-gradient-to-tr from-pink-500 via-rose-500 to-purple-600 opacity-75 blur-[4px] animate-pulse"></div>
+                  <div className={`relative w-11 h-11 rounded-2xl bg-gradient-to-br ${user === 'alireza' ? 'from-rose-500 to-pink-600' : 'from-blue-500 to-indigo-600'} flex items-center justify-center font-bold text-lg text-white shadow-lg border border-white/20`}>
+                    {partnerInitial}
+                  </div>
+                  <span className="absolute -bottom-0.5 -left-0.5 w-3 h-3 bg-emerald-400 border-2 border-[#0d0915] rounded-full shadow"></span>
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <h1 className="font-bold text-sm tracking-tight text-white">{partnerName}</h1>
+                    <Heart className="w-3.5 h-3.5 fill-rose-500 text-rose-500 heart-pulse" />
+                  </div>
+
+                  {partnerIsTyping ? (
+                    <div className="flex items-center gap-1.5 text-[10px] text-pink-300 font-medium mt-0.5 animate-pulse">
+                      <span>در حال نوشتن</span>
+                      <span className="flex gap-0.5">
+                        <span className="w-1 h-1 rounded-full bg-pink-400 animate-bounce"></span>
+                        <span className="w-1 h-1 rounded-full bg-pink-400 animate-bounce [animation-delay:0.2s]"></span>
+                        <span className="w-1 h-1 rounded-full bg-pink-400 animate-bounce [animation-delay:0.4s]"></span>
+                      </span>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-emerald-400/90 mt-0.5 font-light flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                      <span>آنلاین • پیام‌رسانی امن</span>
+                    </p>
+                  )}
+                </div>
               </div>
-              <span className="absolute -bottom-0.5 -left-0.5 w-3 h-3 bg-emerald-400 border-2 border-[#0d0915] rounded-full shadow"></span>
+
+              <div className="flex items-center gap-1.5">
+                <button 
+                  onClick={sendNudge}
+                  className="p-2.5 rounded-xl bg-pink-500/20 hover:bg-pink-500/30 border border-pink-500/30 text-rose-400 transition-all active:scale-90"
+                  title="ارسال تپش قلب (ویبره)"
+                >
+                  <Heart className="w-4 h-4 fill-current" />
+                </button>
+                
+                <button 
+                  onClick={() => setShowSettings(true)}
+                  className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 hover:text-white transition-all active:scale-95"
+                  title="تنظیمات"
+                >
+                  <Settings className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
-            <div>
-              <div className="flex items-center gap-1.5">
-                <h1 className="font-bold text-sm tracking-tight text-white">{partnerName}</h1>
-                <Heart className="w-3.5 h-3.5 fill-rose-500 text-rose-500 heart-pulse" />
-              </div>
-
-              {partnerIsTyping ? (
-                <div className="flex items-center gap-1.5 text-[10px] text-pink-300 font-medium mt-0.5 animate-pulse">
-                  <span>در حال نوشتن</span>
-                  <span className="flex gap-0.5">
-                    <span className="w-1 h-1 rounded-full bg-pink-400 animate-bounce"></span>
-                    <span className="w-1 h-1 rounded-full bg-pink-400 animate-bounce [animation-delay:0.2s]"></span>
-                    <span className="w-1 h-1 rounded-full bg-pink-400 animate-bounce [animation-delay:0.4s]"></span>
-                  </span>
+            {/* Message Stream */}
+            <div className="flex-1 px-4 py-3 overflow-y-auto space-y-3 lux-scroll flex flex-col">
+              {messages.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-white/50 space-y-3">
+                  <div className="w-14 h-14 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-2xl animate-pulse">
+                    💌
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-white/80">هنوز پیامی وجود ندارد</p>
+                    <p className="text-[10px] text-white/40 mt-1">اولین پیام را برای {partnerName} بنویسید و ارسال کنید! ❤️</p>
+                  </div>
                 </div>
               ) : (
-                <p className="text-[10px] text-emerald-400/90 mt-0.5 font-light flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                  <span>آنلاین • پیام‌رسانی امن</span>
-                </p>
-              )}
-            </div>
-          </div>
+                messages.map((m) => {
+                  const isMe = m.sender === user;
+                  const isAudioPlaying = activeAudioId === m.id;
 
-          <div className="flex items-center gap-1.5">
-            <button 
-              onClick={sendNudge}
-              className="p-2.5 rounded-xl bg-pink-500/20 hover:bg-pink-500/30 border border-pink-500/30 text-rose-400 transition-all active:scale-90"
-              title="ارسال تپش قلب (ویبره)"
-            >
-              <Heart className="w-4 h-4 fill-current" />
-            </button>
-            
-            <button 
-              onClick={() => setShowSettings(true)}
-              className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 hover:text-white transition-all active:scale-95"
-              title="تنظیمات، تاریخ سالگرد، فونت و پس‌زمینه"
-            >
-              <Settings className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
+                  return (
+                    <div key={m.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1`}>
+                      <div className={`max-w-[82%] rounded-[22px] ${isMe ? 'rounded-tl-md glass-bubble-out text-white' : 'rounded-tr-md glass-bubble-in text-white/95'} p-3.5 shadow-md`}>
+                        
+                        {m.type === 'text' && (
+                          <p className="text-xs leading-relaxed font-normal">{m.text}</p>
+                        )}
 
-        {/* Message Stream */}
-        <div className="relative z-10 flex-1 px-4 py-3 overflow-y-auto space-y-3 lux-scroll flex flex-col">
-          
-          {messages.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-white/50 space-y-3">
-              <div className="w-14 h-14 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-2xl animate-pulse">
-                💌
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-white/80">هنوز پیامی وجود ندارد</p>
-                <p className="text-[10px] text-white/40 mt-1">اولین پیام را برای {partnerName} بنویسید و ارسال کنید! ❤️</p>
-              </div>
-            </div>
-          ) : (
-            messages.map((m) => {
-              const isMe = m.sender === user;
-              const isAudioPlaying = activeAudioId === m.id;
-
-              return (
-                <div key={m.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1`}>
-                  <div className={`max-w-[82%] rounded-[22px] ${isMe ? 'rounded-tl-md glass-bubble-out text-white' : 'rounded-tr-md glass-bubble-in text-white/95'} p-3.5 shadow-md`}>
-                    
-                    {m.type === 'text' && (
-                      <p className="text-xs leading-relaxed font-normal">{m.text}</p>
-                    )}
-
-                    {m.type === 'image' && (
-                      <div className="rounded-xl overflow-hidden border border-white/20 mb-1">
-                        <img 
-                          src={m.text} 
-                          alt="عکس یادگاری" 
-                          loading="lazy"
-                          className="max-h-56 w-full object-cover cursor-pointer"
-                          onClick={() => window.open(m.text, '_blank')}
-                        />
-                      </div>
-                    )}
-
-                    {m.type === 'audio' && (
-                      <div className="flex items-center gap-3 w-56">
-                        <button 
-                          onClick={() => toggleAudio(m.id, m.text)}
-                          className="w-9 h-9 rounded-xl bg-white/20 hover:bg-white/30 flex items-center justify-center text-white active:scale-95 transition-all shadow-sm shrink-0"
-                        >
-                          {isAudioPlaying ? (
-                            <Pause className="w-4 h-4 fill-current" />
-                          ) : (
-                            <Play className="w-4 h-4 ml-0.5 fill-current" />
-                          )}
-                        </button>
-                        <div className="flex-1">
-                          <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
-                            <div 
-                              className={`h-full bg-white rounded-full transition-all ${isAudioPlaying ? 'opacity-100' : 'opacity-60'}`}
-                              style={{ width: isAudioPlaying ? `${audioProgress}%` : '40%' }}
+                        {m.type === 'image' && (
+                          <div className="rounded-xl overflow-hidden border border-white/20 mb-1">
+                            <img 
+                              src={m.text} 
+                              alt="عکس یادگاری" 
+                              loading="lazy"
+                              className="max-h-56 w-full object-cover cursor-pointer"
+                              onClick={() => window.open(m.text, '_blank')}
                             />
                           </div>
-                          <span className="text-[9px] text-white/70 mt-1 block">
-                            {isAudioPlaying ? 'در حال پخش...' : 'پیام صوتی اختصاصی'}
-                          </span>
+                        )}
+
+                        {m.type === 'audio' && (
+                          <div className="flex items-center gap-3 w-56">
+                            <button 
+                              onClick={() => toggleAudio(m.id, m.text)}
+                              className="w-9 h-9 rounded-xl bg-white/20 hover:bg-white/30 flex items-center justify-center text-white active:scale-95 transition-all shadow-sm shrink-0"
+                            >
+                              {isAudioPlaying ? (
+                                <Pause className="w-4 h-4 fill-current" />
+                              ) : (
+                                <Play className="w-4 h-4 ml-0.5 fill-current" />
+                              )}
+                            </button>
+                            <div className="flex-1">
+                              <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
+                                <div 
+                                  className={`h-full bg-white rounded-full transition-all ${isAudioPlaying ? 'opacity-100' : 'opacity-60'}`}
+                                  style={{ width: isAudioPlaying ? `${audioProgress}%` : '40%' }}
+                                />
+                              </div>
+                              <span className="text-[9px] text-white/70 mt-1 block">
+                                {isAudioPlaying ? 'در حال پخش...' : 'پیام صوتی اختصاصی'}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className={`flex items-center justify-end gap-1 mt-1 text-[9px] ${isMe ? 'text-white/80' : 'text-white/40'} font-mono`}>
+                          <span>{m.time}</span>
+                          {isMe && <span className="font-bold">✓✓</span>}
                         </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Input & Voice Deck */}
+            <div className="p-3 bg-black/70 backdrop-blur-2xl border-t border-white/10">
+              {isRecording ? (
+                <div className="flex items-center justify-between bg-rose-950/60 border border-rose-500/40 rounded-2xl px-4 py-2.5 animate-pulse">
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span>
+                    <span className="text-xs font-mono font-bold text-rose-300">{formatSeconds(recordSeconds)}</span>
+                    <span className="text-[11px] text-white/80 font-medium">در حال ضبط صدا...</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button 
+                      type="button" 
+                      onClick={() => stopRecording(false)}
+                      className="px-2.5 py-1 rounded-xl bg-white/10 hover:bg-white/20 text-[10px] text-white/70"
+                    >
+                      لغو
+                    </button>
+                    <button 
+                      type="button" 
+                      onClick={() => stopRecording(true)}
+                      className="p-2 rounded-xl bg-rose-500 text-white active:scale-95 shadow-md"
+                    >
+                      <Send className="w-4 h-4 rotate-180" />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <form 
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    sendMessage('text');
+                  }}
+                  className="flex items-center gap-2"
+                >
+                  <button 
+                    type="button" 
+                    onClick={() => sendMessage('text', '🫀❤️ دلتنگتم بی‌نهایت...')}
+                    className="p-2.5 rounded-2xl glass-panel text-rose-400 hover:text-rose-300 active:scale-95 transition-all shadow-md shrink-0"
+                    title="ارسال قلب"
+                  >
+                    ❤️
+                  </button>
+
+                  <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    onChange={handleImageUpload} 
+                    accept="image/*" 
+                    className="hidden" 
+                  />
+                  <button 
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="p-2.5 rounded-2xl glass-panel text-white/70 hover:text-white active:scale-95 transition-all shadow-md shrink-0"
+                    title="ارسال عکس"
+                  >
+                    <ImageIcon className="w-4 h-4" />
+                  </button>
+
+                  <div className="flex-1 relative">
+                    <input 
+                      type="text" 
+                      value={inputVal}
+                      onChange={handleInputChange}
+                      placeholder={`پیامی برای ${partnerName}...`}
+                      className="w-full glass-input rounded-2xl px-4 py-2.5 text-xs text-white placeholder-white/40 focus:outline-none focus:ring-1 focus:ring-pink-500/60 transition-all shadow-inner"
+                    />
+                  </div>
+
+                  {inputVal.trim() ? (
+                    <button 
+                      type="submit" 
+                      className="p-2.5 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 text-white active:scale-95 transition-all shadow-lg flex items-center justify-center shrink-0"
+                    >
+                      <Send className="w-4 h-4 rotate-180" />
+                    </button>
+                  ) : (
+                    <button 
+                      type="button"
+                      onClick={startRecording}
+                      className="p-2.5 rounded-2xl glass-panel text-white/80 active:scale-95 transition-all shadow-lg flex items-center justify-center shrink-0"
+                      title="ضبط وویس"
+                    >
+                      <Mic className="w-4 h-4" />
+                    </button>
+                  )}
+                </form>
+              )}
+            </div>
+
+          </div>
+        )}
+
+        {/* ---------------------------------------------------- */}
+        {/* TAB 2: MEMORIES & MILESTONES (گاه‌شمار خاطرات) */}
+        {/* ---------------------------------------------------- */}
+        {activeTab === 'memories' && (
+          <div className="flex-1 flex flex-col overflow-hidden relative z-10">
+            
+            {/* Header */}
+            <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-bold text-white flex items-center gap-1.5">
+                  <BookHeart className="w-4 h-4 text-pink-400" />
+                  <span>دفترچه خاطرات مشترک</span>
+                </h2>
+                <p className="text-[10px] text-pink-200/60 mt-0.5">ثبت عکس‌ها، فیلم‌ها و روزهای خاطره‌انگیز ما</p>
+              </div>
+
+              <button 
+                onClick={() => setShowAddMemory(true)}
+                className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-pink-500 to-purple-600 text-white text-xs font-bold flex items-center gap-1 shadow-lg active:scale-95 transition-all"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>ثبت خاطره</span>
+              </button>
+            </div>
+
+            {/* Memories List */}
+            <div className="flex-1 px-4 py-3 overflow-y-auto space-y-4 lux-scroll">
+              {memories.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center p-6 text-white/40 space-y-3">
+                  <div className="w-16 h-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-3xl">
+                    📸
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-white/70">هنوز خاطره‌ای ثبت نکرده‌اید</p>
+                    <p className="text-[10px] text-white/40 mt-1">با زدن دکمه «ثبت خاطره»، اولین عکس یادگاری دونفره را اینجا ماندگار کنید!</p>
+                  </div>
+                </div>
+              ) : (
+                memories.map((mem) => (
+                  <div key={mem.id} className="rounded-3xl glass-panel p-3.5 border border-white/10 shadow-xl space-y-2.5">
+                    
+                    {/* Media Preview (Photo or Video) */}
+                    {mem.media && (
+                      <div className="rounded-2xl overflow-hidden border border-white/15 bg-black/50 aspect-video relative flex items-center justify-center">
+                        {mem.mediaType === 'video' ? (
+                          <video src={mem.media} controls className="w-full h-full object-cover" />
+                        ) : (
+                          <img src={mem.media} alt={mem.title} className="w-full h-full object-cover" />
+                        )}
                       </div>
                     )}
 
-                    <div className={`flex items-center justify-end gap-1 mt-1 text-[9px] ${isMe ? 'text-white/80' : 'text-white/40'} font-mono`}>
-                      <span>{m.time}</span>
-                      {isMe && <span className="font-bold">✓✓</span>}
+                    {/* Details */}
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <h3 className="font-bold text-xs text-white">{mem.title}</h3>
+                        <span className="text-[9px] font-mono text-pink-300 px-2 py-0.5 rounded-full bg-pink-500/10 border border-pink-500/20">
+                          {mem.date}
+                        </span>
+                      </div>
+
+                      {mem.desc && (
+                        <p className="text-[11px] text-white/70 leading-relaxed mt-1.5 font-light">{mem.desc}</p>
+                      )}
+
+                      <div className="flex items-center justify-between pt-2 border-t border-white/5 text-[9px] text-white/40">
+                        <span>ثبت شده توسط: {mem.createdBy === 'alireza' ? 'علیرضا 👨‍💻' : 'فاطمه 🌸'}</span>
+                        <span>❤️ یادگاری همیشگی</span>
+                      </div>
+                    </div>
+
+                  </div>
+                ))
+              )}
+            </div>
+
+          </div>
+        )}
+
+        {/* ---------------------------------------------------- */}
+        {/* TAB 3: COUPLE'S SHARED PLAYLIST (موزیک ما) */}
+        {/* ---------------------------------------------------- */}
+        {activeTab === 'playlist' && (
+          <div className="flex-1 flex flex-col overflow-hidden relative z-10 p-4">
+            
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+              <div>
+                <h2 className="text-sm font-bold text-white flex items-center gap-1.5">
+                  <Music className="w-4 h-4 text-pink-400" />
+                  <span>پلی‌لیست مشترک دونفره</span>
+                </h2>
+                <p className="text-[10px] text-pink-200/60 mt-0.5">آهنگ‌هایی که با شنیدنشون یاد هم می‌افتیم</p>
+              </div>
+
+              {/* Add Custom MP3 Song */}
+              <input 
+                type="file" 
+                ref={songInputRef} 
+                onChange={handleAddSongFile} 
+                accept="audio/*" 
+                className="hidden" 
+              />
+              <button 
+                onClick={() => songInputRef.current?.click()}
+                className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-pink-300 text-xs font-semibold flex items-center gap-1 transition-all active:scale-95"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>افزودن آهنگ</span>
+              </button>
+            </div>
+
+            {/* Main Music Player Card */}
+            {currentTrack && (
+              <div className="my-4 p-5 rounded-3xl bg-gradient-to-b from-pink-950/40 via-purple-950/30 to-black/60 border border-pink-500/20 backdrop-blur-xl shadow-2xl flex flex-col items-center text-center">
+                
+                {/* Rotating Vinyl Record Artwork */}
+                <div className={`relative w-28 h-28 rounded-full border-4 border-pink-500/30 p-1 mb-4 shadow-[0_0_30px_rgba(244,63,94,0.3)] ${isPlayingMusic ? 'animate-spin [animation-duration:12s]' : ''}`}>
+                  <div className="w-full h-full rounded-full bg-gradient-to-tr from-purple-900 via-rose-900 to-black flex items-center justify-center border-2 border-white/20">
+                    <div className="w-8 h-8 rounded-full bg-rose-500 border-2 border-white/40 flex items-center justify-center text-xs">
+                      🎵
                     </div>
                   </div>
                 </div>
-              );
-            })
-          )}
-          <div ref={messagesEndRef} />
+
+                {/* Track Info */}
+                <h3 className="font-bold text-sm text-white drop-shadow-sm">{currentTrack.title}</h3>
+                <p className="text-[11px] text-pink-300/80 mt-0.5">{currentTrack.artist}</p>
+
+                {/* Audio Element */}
+                <audio 
+                  ref={musicAudioRef}
+                  src={currentTrack.src}
+                  onTimeUpdate={() => {
+                    if (musicAudioRef.current && musicAudioRef.current.duration) {
+                      setMusicProgress((musicAudioRef.current.currentTime / musicAudioRef.current.duration) * 100);
+                      setMusicDuration(musicAudioRef.current.duration);
+                    }
+                  }}
+                  onEnded={() => changeTrack(1)}
+                />
+
+                {/* Scrubber Progress Bar */}
+                <div className="w-full mt-4">
+                  <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden cursor-pointer">
+                    <div 
+                      className="h-full bg-gradient-to-r from-pink-500 to-purple-500 rounded-full transition-all"
+                      style={{ width: `${musicProgress}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[9px] font-mono text-white/40 mt-1">
+                    <span>{musicAudioRef.current ? formatSeconds(musicAudioRef.current.currentTime) : '0:00'}</span>
+                    <span>{musicDuration ? formatSeconds(musicDuration) : '0:00'}</span>
+                  </div>
+                </div>
+
+                {/* Controls Deck */}
+                <div className="flex items-center gap-6 mt-3">
+                  <button 
+                    onClick={() => changeTrack(-1)}
+                    className="p-2 rounded-full text-white/70 hover:text-white active:scale-90 transition-all"
+                  >
+                    <SkipBack className="w-5 h-5" />
+                  </button>
+
+                  <button 
+                    onClick={toggleMusicPlay}
+                    className="w-12 h-12 rounded-full bg-gradient-to-tr from-pink-500 via-rose-500 to-purple-600 text-white flex items-center justify-center shadow-lg active:scale-90 transition-all"
+                  >
+                    {isPlayingMusic ? (
+                      <Pause className="w-5 h-5 fill-current" />
+                    ) : (
+                      <Play className="w-5 h-5 ml-0.5 fill-current" />
+                    )}
+                  </button>
+
+                  <button 
+                    onClick={() => changeTrack(1)}
+                    className="p-2 rounded-full text-white/70 hover:text-white active:scale-90 transition-all"
+                  >
+                    <SkipForward className="w-5 h-5" />
+                  </button>
+                </div>
+
+              </div>
+            )}
+
+            {/* Song List */}
+            <div className="flex-1 overflow-y-auto space-y-1.5 lux-scroll">
+              <span className="text-[10px] text-white/40 font-semibold block mb-1">لیست تمام آهنگ‌های ما ({playlist.length}):</span>
+              {playlist.map((track, idx) => (
+                <div 
+                  key={track.id}
+                  onClick={() => {
+                    setCurrentTrackIdx(idx);
+                    setIsPlayingMusic(false);
+                    setTimeout(() => {
+                      if (musicAudioRef.current) {
+                        musicAudioRef.current.play().then(() => setIsPlayingMusic(true)).catch(console.error);
+                      }
+                    }, 100);
+                  }}
+                  className={`p-3 rounded-2xl border transition-all flex items-center justify-between cursor-pointer ${currentTrackIdx === idx ? 'bg-pink-500/20 border-pink-500/40 text-white' : 'bg-white/5 border-white/5 text-white/70 hover:bg-white/10'}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center text-xs">
+                      {currentTrackIdx === idx && isPlayingMusic ? '▶️' : '🎵'}
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-white">{track.title}</p>
+                      <p className="text-[10px] text-white/50">{track.artist}</p>
+                    </div>
+                  </div>
+
+                  <span className="text-[9px] text-pink-300 font-mono">
+                    {track.addedBy ? `افزوده: ${track.addedBy}` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+          </div>
+        )}
+
+        {/* ---------------------------------------------------- */}
+        {/* BOTTOM NAVIGATION BAR */}
+        {/* ---------------------------------------------------- */}
+        <div className="relative z-30 bg-black/85 backdrop-blur-2xl border-t border-white/10 px-6 py-2.5 flex items-center justify-around shadow-2xl">
+          
+          <button 
+            onClick={() => setActiveTab('chat')}
+            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'chat' ? 'text-pink-400 font-bold scale-105' : 'text-white/40 hover:text-white/80'}`}
+          >
+            <MessageCircle className="w-5 h-5" />
+            <span className="text-[10px]">گفتگو</span>
+          </button>
+
+          <button 
+            onClick={() => setActiveTab('memories')}
+            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'memories' ? 'text-pink-400 font-bold scale-105' : 'text-white/40 hover:text-white/80'}`}
+          >
+            <BookHeart className="w-5 h-5" />
+            <span className="text-[10px]">خاطرات ما</span>
+          </button>
+
+          <button 
+            onClick={() => setActiveTab('playlist')}
+            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'playlist' ? 'text-pink-400 font-bold scale-105' : 'text-white/40 hover:text-white/80'}`}
+          >
+            <Music className="w-5 h-5" />
+            <span className="text-[10px]">موزیک ما</span>
+          </button>
+
         </div>
+
+        {/* Modal: Add New Memory */}
+        {showAddMemory && (
+          <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col justify-end animate-fadeIn">
+            <div className="bg-[#140d21] border-t border-white/20 rounded-t-[36px] p-5 max-h-[90%] overflow-y-auto lux-scroll shadow-2xl">
+              
+              <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  <BookHeart className="w-5 h-5 text-pink-400" />
+                  <h3 className="font-bold text-sm text-white">ثبت خاطره جدید دونفره</h3>
+                </div>
+                <button 
+                  onClick={() => setShowAddMemory(false)}
+                  className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveMemory} className="mt-4 space-y-3.5 text-right">
+                
+                <div>
+                  <label className="text-[11px] text-white/70 block mb-1">عنوان خاطره:</label>
+                  <input 
+                    type="text" 
+                    placeholder="مثلاً: اولین باری که باهم رفتیم کافه..." 
+                    value={newMemTitle}
+                    onChange={(e) => setNewMemTitle(e.target.value)}
+                    className="w-full bg-black/40 border border-white/15 rounded-2xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-pink-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[11px] text-white/70 block mb-1">تاریخ این روز قشنگ:</label>
+                  <input 
+                    type="date" 
+                    value={newMemDate}
+                    onChange={(e) => setNewMemDate(e.target.value)}
+                    className="w-full bg-black/40 border border-white/15 rounded-2xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-pink-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[11px] text-white/70 block mb-1">یادداشت / دلنوشته خاطره:</label>
+                  <textarea 
+                    rows="3"
+                    placeholder="چیزی که اون روز حس کردی رو بنویس..." 
+                    value={newMemDesc}
+                    onChange={(e) => setNewMemDesc(e.target.value)}
+                    className="w-full bg-black/40 border border-white/15 rounded-2xl p-3 text-xs text-white focus:outline-none focus:border-pink-500 resize-none"
+                  ></textarea>
+                </div>
+
+                {/* Media Picker */}
+                <div>
+                  <label className="text-[11px] text-white/70 block mb-1">افزودن عکس یا فیلم یادگاری:</label>
+                  <input 
+                    type="file" 
+                    ref={memoryMediaInputRef} 
+                    onChange={handleMemoryMediaSelect} 
+                    accept="image/*,video/*" 
+                    className="hidden" 
+                  />
+                  <button 
+                    type="button"
+                    onClick={() => memoryMediaInputRef.current?.click()}
+                    className="w-full py-3 px-4 rounded-2xl border border-dashed border-pink-500/40 bg-pink-500/10 text-pink-300 flex items-center justify-center gap-2 text-xs hover:bg-pink-500/20 active:scale-95 transition-all"
+                  >
+                    <Upload className="w-4 h-4" />
+                    <span>{newMemMedia ? 'تغییر فایل انتخاب شده' : 'انتخاب عکس یا ویدیو از گالری'}</span>
+                  </button>
+                  {newMemMedia && (
+                    <span className="text-[10px] text-emerald-400 mt-1 block">✓ فایل بارگذاری شد</span>
+                  )}
+                </div>
+
+                <button 
+                  type="submit"
+                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-pink-500 to-purple-600 text-white font-bold text-xs shadow-lg active:scale-95 transition-all mt-4"
+                >
+                  ثبت همیشگی این خاطره ❤️
+                </button>
+
+              </form>
+
+            </div>
+          </div>
+        )}
 
         {/* Fullscreen Heart Burst Overlay */}
         {showHeartBurst && (
-          <div className="absolute inset-0 pointer-events-none z-40 flex items-center justify-center">
+          <div className="absolute inset-0 pointer-events-none z-50 flex items-center justify-center">
             <div className="text-8xl animate-ping opacity-90">💖</div>
           </div>
         )}
 
         {/* Nudge Alert Toast */}
         {nudgeAlert && (
-          <div className="relative z-30 mx-4 mb-2 p-3 rounded-2xl bg-gradient-to-r from-rose-500/90 to-purple-600/90 backdrop-blur-xl border border-white/20 text-white text-xs shadow-lg flex items-center justify-between animate-bounce">
+          <div className="absolute top-14 left-4 right-4 z-40 p-3 rounded-2xl bg-gradient-to-r from-rose-500/90 to-purple-600/90 backdrop-blur-xl border border-white/20 text-white text-xs shadow-lg flex items-center justify-between animate-bounce">
             <div className="flex items-center gap-2">
               <span className="text-lg">💓</span>
               <p className="font-medium text-[11px]">{nudgeAlert}</p>
@@ -704,101 +1316,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Input & Voice Recording Deck */}
-        <div className="relative z-20 p-3 bg-black/70 backdrop-blur-2xl border-t border-white/10 pb-5 sm:pb-3">
-          
-          {/* Active Voice Recording Pill UI */}
-          {isRecording ? (
-            <div className="flex items-center justify-between bg-rose-950/60 border border-rose-500/40 rounded-2xl px-4 py-2.5 animate-pulse">
-              <div className="flex items-center gap-2.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span>
-                <span className="text-xs font-mono font-bold text-rose-300">{formatSeconds(recordSeconds)}</span>
-                <span className="text-[11px] text-white/80 font-medium">در حال ضبط صدا...</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button 
-                  type="button" 
-                  onClick={() => stopRecording(false)}
-                  className="px-2.5 py-1 rounded-xl bg-white/10 hover:bg-white/20 text-[10px] text-white/70"
-                >
-                  لغو
-                </button>
-                <button 
-                  type="button" 
-                  onClick={() => stopRecording(true)}
-                  className="p-2 rounded-xl bg-rose-500 text-white active:scale-95 shadow-md"
-                  title="ارسال وویس"
-                >
-                  <Send className="w-4 h-4 rotate-180" />
-                </button>
-              </div>
-            </div>
-          ) : (
-            <form 
-              onSubmit={(e) => {
-                e.preventDefault();
-                sendMessage('text');
-              }}
-              className="flex items-center gap-2"
-            >
-              <button 
-                type="button" 
-                onClick={() => sendMessage('text', '🫀❤️ دلتنگتم بی‌نهایت...')}
-                className="p-2.5 rounded-2xl glass-panel text-rose-400 hover:text-rose-300 active:scale-95 transition-all shadow-md shrink-0"
-                title="ارسال قلب"
-              >
-                ❤️
-              </button>
-
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                onChange={handleImageUpload} 
-                accept="image/*" 
-                className="hidden" 
-              />
-              <button 
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="p-2.5 rounded-2xl glass-panel text-white/70 hover:text-white active:scale-95 transition-all shadow-md shrink-0"
-                title="ارسال عکس"
-              >
-                <ImageIcon className="w-4 h-4" />
-              </button>
-
-              <div className="flex-1 relative">
-                <input 
-                  type="text" 
-                  value={inputVal}
-                  onChange={handleInputChange}
-                  placeholder={`پیامی برای ${partnerName}...`}
-                  className="w-full glass-input rounded-2xl px-4 py-2.5 text-xs text-white placeholder-white/40 focus:outline-none focus:ring-1 focus:ring-pink-500/60 transition-all shadow-inner"
-                />
-              </div>
-
-              {inputVal.trim() ? (
-                <button 
-                  type="submit" 
-                  className="p-2.5 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 text-white active:scale-95 transition-all shadow-lg flex items-center justify-center shrink-0"
-                >
-                  <Send className="w-4 h-4 rotate-180" />
-                </button>
-              ) : (
-                <button 
-                  type="button"
-                  onClick={startRecording}
-                  className="p-2.5 rounded-2xl glass-panel text-white/80 active:scale-95 transition-all shadow-lg flex items-center justify-center shrink-0"
-                  title="ضبط وویس"
-                >
-                  <Mic className="w-4 h-4" />
-                </button>
-              )}
-            </form>
-          )}
-
-        </div>
-
-        {/* Customization Settings Bottom Sheet */}
+        {/* Settings Modal */}
         {showSettings && (
           <div className="absolute inset-0 z-50 bg-black/75 backdrop-blur-md flex flex-col justify-end animate-fadeIn">
             <div className="bg-[#140d21] border-t border-white/20 rounded-t-[36px] p-5 max-h-[85%] overflow-y-auto lux-scroll shadow-2xl">
@@ -823,7 +1341,7 @@ export default function App() {
                   <span>تاریخ شروع باهم بودن (محاسبه واقعی روزها):</span>
                 </div>
                 <input 
-                  type="date"
+                  type="date" 
                   value={startDate}
                   onChange={(e) => setStartDate(e.target.value)}
                   className="w-full bg-black/40 border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-pink-500 font-mono"
@@ -943,7 +1461,7 @@ export default function App() {
                 )}
               </div>
 
-              {/* Clear Chat History Option */}
+              {/* Clear Chat History */}
               <div className="mt-5 pt-4 border-t border-white/10">
                 <button 
                   onClick={clearAllMessages}

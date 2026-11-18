@@ -5,8 +5,9 @@ const TOPIC_MSG = `${ROOM_CHANNEL}/msg`;
 const TOPIC_NUDGE = `${ROOM_CHANNEL}/nudge`;
 const TOPIC_STATUS = `${ROOM_CHANNEL}/status`;
 const TOPIC_TYPING = `${ROOM_CHANNEL}/typing`;
+const TOPIC_MEMORY = `${ROOM_CHANNEL}/memory`;
+const TOPIC_PLAYLIST = `${ROOM_CHANNEL}/playlist`;
 
-// Redundant brokers for 100% uptime in Iran and global networks
 const BROKERS = [
   'wss://broker.emqx.io:8084/mqtt',
   'wss://broker.hivemq.com:8884/mqtt'
@@ -16,7 +17,7 @@ let client = null;
 let currentBrokerIdx = 0;
 let isConnecting = false;
 
-export function initCloudSync({ onMessage, onNudge, onTyping, onStatusChange }) {
+export function initCloudSync({ onMessage, onNudge, onTyping, onMemory, onPlaylist, onStatusChange }) {
   if (client && client.connected) {
     if (onStatusChange) onStatusChange(true);
     return client;
@@ -47,7 +48,14 @@ export function initCloudSync({ onMessage, onNudge, onTyping, onStatusChange }) 
         console.log(`✨ Connected to Cloud Broker [${brokerUrl}]`);
         if (onStatusChange) onStatusChange(true);
 
-        client.subscribe([TOPIC_MSG, TOPIC_NUDGE, TOPIC_STATUS, TOPIC_TYPING], (err) => {
+        client.subscribe([
+          TOPIC_MSG, 
+          TOPIC_NUDGE, 
+          TOPIC_STATUS, 
+          TOPIC_TYPING,
+          TOPIC_MEMORY,
+          TOPIC_PLAYLIST
+        ], (err) => {
           if (err) console.error('Sub error:', err);
         });
       });
@@ -61,6 +69,10 @@ export function initCloudSync({ onMessage, onNudge, onTyping, onStatusChange }) 
             onNudge(data);
           } else if (topic === TOPIC_TYPING && onTyping) {
             onTyping(data);
+          } else if (topic === TOPIC_MEMORY && onMemory) {
+            onMemory(data);
+          } else if (topic === TOPIC_PLAYLIST && onPlaylist) {
+            onPlaylist(data);
           }
         } catch (e) {
           console.error('MQTT parse error:', e);
@@ -106,5 +118,17 @@ export function sendCloudNudge(sender) {
 export function sendCloudTyping(sender) {
   if (client && client.connected) {
     client.publish(TOPIC_TYPING, JSON.stringify({ sender }), { qos: 0 });
+  }
+}
+
+export function sendCloudMemory(memoryObj) {
+  if (client && client.connected) {
+    client.publish(TOPIC_MEMORY, JSON.stringify(memoryObj), { qos: 1 });
+  }
+}
+
+export function sendCloudPlaylist(trackObj) {
+  if (client && client.connected) {
+    client.publish(TOPIC_PLAYLIST, JSON.stringify(trackObj), { qos: 1 });
   }
 }
