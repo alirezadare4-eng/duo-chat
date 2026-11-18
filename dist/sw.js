@@ -1,4 +1,4 @@
-const CACHE_NAME = 'duo-chat-v2';
+const CACHE_NAME = 'duo-chat-v3';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();

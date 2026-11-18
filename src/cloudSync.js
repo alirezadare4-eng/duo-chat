@@ -137,8 +137,9 @@ export function sendCloudPlaylist(trackObj) {
   }
 }
 
-export function sendCloudDelete(messageId) {
+export function sendCloudDelete(messageIdOrData) {
   if (client && client.connected) {
-    client.publish(TOPIC_DELETE, JSON.stringify({ id: messageId }), { qos: 1 });
+    const payload = typeof messageIdOrData === 'object' ? messageIdOrData : { id: messageIdOrData };
+    client.publish(TOPIC_DELETE, JSON.stringify(payload), { qos: 1 });
   }
 }

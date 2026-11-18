@@ -76,6 +76,10 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('receive_nudge', sender);
   });
 
+  socket.on('delete_message', (data) => {
+    socket.broadcast.emit('delete_message', data);
+  });
+
   socket.on('disconnect', () => {
     const userId = onlineUsers.get(socket.id);
     onlineUsers.delete(socket.id);

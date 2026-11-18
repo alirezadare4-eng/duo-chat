@@ -28,7 +28,10 @@ import {
   Clock, 
   Flame, 
   Eye, 
-  Lock 
+  Lock,
+  Reply,
+  Copy,
+  MoreHorizontal
 } from 'lucide-react';
 import { 
   initCloudSync, 
@@ -148,6 +151,14 @@ export default function App() {
   const [inputVal, setInputVal] = useState('');
   const [nudgeAlert, setNudgeAlert] = useState(null);
   const [showHeartBurst, setShowHeartBurst] = useState(false);
+
+  // Message Actions (Reply, Delete, Long-Press)
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [selectedMsgForMenu, setSelectedMsgForMenu] = useState(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [highlightedMsgId, setHighlightedMsgId] = useState(null);
+  const longPressTimerRef = useRef(null);
+  const textInputRef = useRef(null);
 
   const messagesEndRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -303,18 +314,24 @@ export default function App() {
         setNudgeAlert(`آهنگ «${track.title}» به پلی‌لیست مشترک اضافه شد! 🎵`);
         setTimeout(() => setNudgeAlert(null), 3500);
       },
-      onDeleteMessage: ({ id }) => {
-        // Mark message as expired on both devices
-        setMessages((prev) => 
-          prev.map((m) => {
-            if (m.id === id) {
-              const updated = { ...m, expired: true, text: '' };
-              saveToStore('messages', updated);
-              return updated;
-            }
-            return m;
-          })
-        );
+      onDeleteMessage: ({ id, forBoth, action }) => {
+        if (action === 'delete' || forBoth) {
+          // Permanent deletion requested
+          setMessages((prev) => prev.filter((m) => m.id !== id));
+          deleteFromStore('messages', id);
+        } else {
+          // Timed photo expired
+          setMessages((prev) => 
+            prev.map((m) => {
+              if (m.id === id) {
+                const updated = { ...m, expired: true, text: '' };
+                saveToStore('messages', updated);
+                return updated;
+              }
+              return m;
+            })
+          );
+        }
       }
     });
   }, [user]);
@@ -375,21 +392,91 @@ export default function App() {
     const now = new Date();
     const timeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
 
+    let replyData = null;
+    if (meta.replyTo) {
+      replyData = meta.replyTo;
+    } else if (replyingTo) {
+      const snippet = replyingTo.type === 'text'
+        ? (replyingTo.text.length > 50 ? replyingTo.text.substring(0, 50) + '...' : replyingTo.text)
+        : (replyingTo.type === 'audio' ? '🎵 پیام صوتی' : (replyingTo.type === 'timed_image' ? '⏳ عکس محوشونده' : '🖼️ عکس'));
+
+      replyData = {
+        id: replyingTo.id,
+        sender: replyingTo.sender,
+        text: snippet
+      };
+    }
+
     const newMsg = {
       id: generateMessageId(),
       sender: user,
       text: textToSend,
       time: timeStr,
       type,
+      ...(replyData ? { replyTo: replyData } : {}),
       ...meta
     };
 
     setMessages((prev) => [...prev, newMsg]);
     await saveToStore('messages', newMsg);
     if (type === 'text') setInputVal('');
+    setReplyingTo(null);
 
     sendCloudMessage(newMsg);
     socket.emit('send_message', newMsg);
+  };
+
+  // Long-press detection for touch devices
+  const handleMessageTouchStart = (msg) => {
+    longPressTimerRef.current = setTimeout(() => {
+      if ('vibrate' in navigator) {
+        try { navigator.vibrate(40); } catch (e) {}
+      }
+      setSelectedMsgForMenu(msg);
+      setShowDeleteConfirm(false);
+    }, 450);
+  };
+
+  const handleMessageTouchEnd = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const handleMessageTouchMove = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const handleDeleteMessage = async (msgId, forBoth = false) => {
+    setMessages((prev) => prev.filter((m) => m.id !== msgId));
+    await deleteFromStore('messages', msgId);
+
+    if (forBoth) {
+      sendCloudDelete({ id: msgId, forBoth: true, action: 'delete' });
+      socket.emit('delete_message', { id: msgId, forBoth: true });
+      setNudgeAlert('پیام برای هر دو نفر حذف شد 🗑️');
+    } else {
+      setNudgeAlert('پیام از دستگاه شما حذف شد 🗑️');
+    }
+    setTimeout(() => setNudgeAlert(null), 2500);
+    setSelectedMsgForMenu(null);
+    setShowDeleteConfirm(false);
+  };
+
+  const scrollToMessage = (msgId) => {
+    const el = document.getElementById(`msg-${msgId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedMsgId(msgId);
+      setTimeout(() => setHighlightedMsgId(null), 1600);
+    } else {
+      setNudgeAlert('این پیام یافت نشد یا قبلاً حذف شده است');
+      setTimeout(() => setNudgeAlert(null), 2000);
+    }
   };
 
   const sendNudge = () => {
@@ -898,12 +985,41 @@ export default function App() {
                   const isAudioPlaying = activeAudioId === m.id;
 
                   return (
-                    <div key={m.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1`}>
-                      <div className={`max-w-[82%] rounded-[22px] ${isMe ? 'rounded-tl-md glass-bubble-out text-white' : 'rounded-tr-md glass-bubble-in text-white/95'} p-3.5 shadow-md`}>
-                        
+                    <div 
+                      key={m.id} 
+                      id={`msg-${m.id}`}
+                      className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1 transition-all duration-300 ${highlightedMsgId === m.id ? 'scale-102 ring-2 ring-rose-400 rounded-3xl p-1 bg-rose-500/15' : ''}`}
+                    >
+                      <div 
+                        onTouchStart={() => handleMessageTouchStart(m)}
+                        onTouchEnd={handleMessageTouchEnd}
+                        onTouchMove={handleMessageTouchMove}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setSelectedMsgForMenu(m);
+                          setShowDeleteConfirm(false);
+                        }}
+                        className={`max-w-[84%] rounded-[22px] ${isMe ? 'rounded-tl-md glass-bubble-out text-white' : 'rounded-tr-md glass-bubble-in text-white/95'} p-3.5 shadow-md group relative select-text`}
+                      >
+                        {/* Quoted Replying Header */}
+                        {m.replyTo && (
+                          <div 
+                            onClick={() => scrollToMessage(m.replyTo.id)}
+                            className="mb-2 p-2 rounded-xl bg-black/30 border-r-2 border-rose-400/90 cursor-pointer text-right hover:bg-black/45 transition-colors"
+                          >
+                            <div className="flex items-center gap-1 text-[10px] text-rose-300 font-medium">
+                              <Reply className="w-3 h-3 inline-block rotate-180" />
+                              <span>{m.replyTo.sender === user ? 'شما' : partnerName}</span>
+                            </div>
+                            <p className="text-[11px] text-white/70 truncate mt-0.5 select-none font-normal">
+                              {m.replyTo.text}
+                            </p>
+                          </div>
+                        )}
+
                         {/* Text Message */}
                         {m.type === 'text' && (
-                          <p className="text-xs leading-relaxed font-normal">{m.text}</p>
+                          <p className="text-xs leading-relaxed font-normal whitespace-pre-wrap">{m.text}</p>
                         )}
 
                         {/* Permanent Image */}
@@ -974,9 +1090,24 @@ export default function App() {
                           </div>
                         )}
 
-                        <div className={`flex items-center justify-end gap-1 mt-1 text-[9px] ${isMe ? 'text-white/80' : 'text-white/40'} font-mono`}>
-                          <span>{m.time}</span>
-                          {isMe && <span className="font-bold">✓✓</span>}
+                        {/* Meta info & Action trigger */}
+                        <div className={`flex items-center justify-between gap-2 mt-1 text-[9px] ${isMe ? 'text-white/80' : 'text-white/40'} font-mono`}>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedMsgForMenu(m);
+                              setShowDeleteConfirm(false);
+                            }}
+                            className="opacity-40 hover:opacity-100 p-0.5 text-white/60 hover:text-white transition-opacity active:scale-90"
+                            title="گزینه‌ها (ریپلای و حذف)"
+                          >
+                            <MoreHorizontal className="w-3.5 h-3.5" />
+                          </button>
+                          <div className="flex items-center gap-1">
+                            <span>{m.time}</span>
+                            {isMe && <span className="font-bold">✓✓</span>}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -988,6 +1119,39 @@ export default function App() {
 
             {/* Input & Voice Deck */}
             <div className="p-3 bg-black/70 backdrop-blur-2xl border-t border-white/10">
+              {/* Reply Preview Bar */}
+              {replyingTo && (
+                <div className="flex items-center justify-between px-3 py-2 bg-white/10 backdrop-blur-md rounded-2xl border-r-4 border-rose-400 mb-2 text-xs text-white/90 animate-fadeIn">
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    <div className="w-6 h-6 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
+                      <Reply className="w-3.5 h-3.5 rotate-180" />
+                    </div>
+                    <div className="flex flex-col text-right truncate">
+                      <span className="text-[10px] text-rose-300 font-semibold">
+                        پاسخ به {replyingTo.sender === user ? 'خودتان' : partnerName}
+                      </span>
+                      <span className="text-[11px] text-white/70 truncate">
+                        {replyingTo.type === 'text' 
+                          ? replyingTo.text 
+                          : replyingTo.type === 'audio' 
+                            ? '🎵 پیام صوتی' 
+                            : replyingTo.type === 'timed_image' 
+                              ? '⏳ عکس محوشونده' 
+                              : '🖼️ عکس'}
+                      </span>
+                    </div>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => setReplyingTo(null)} 
+                    className="p-1 hover:bg-white/10 rounded-full transition-colors text-white/50 hover:text-white shrink-0"
+                    title="لغو پاسخ"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
               {isRecording ? (
                 <div className="flex items-center justify-between bg-rose-950/60 border border-rose-500/40 rounded-2xl px-4 py-2.5 animate-pulse">
                   <div className="flex items-center gap-2.5">
@@ -1048,9 +1212,10 @@ export default function App() {
                   <div className="flex-1 relative">
                     <input 
                       type="text" 
+                      ref={textInputRef}
                       value={inputVal}
                       onChange={handleInputChange}
-                      placeholder={`پیامی برای ${partnerName}...`}
+                      placeholder={replyingTo ? `پاسخ به ${replyingTo.sender === user ? 'پیام خودت' : partnerName}...` : `پیامی برای ${partnerName}...`}
                       className="w-full glass-input rounded-2xl px-4 py-2.5 text-xs text-white placeholder-white/40 focus:outline-none focus:ring-1 focus:ring-pink-500/60 transition-all shadow-inner"
                     />
                   </div>
@@ -1671,6 +1836,158 @@ export default function App() {
               >
                 بستن تنظیمات ✨
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Message Long-Press / Options Action Sheet */}
+        {selectedMsgForMenu && (
+          <div 
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-sm animate-fadeIn"
+            onClick={() => { setSelectedMsgForMenu(null); setShowDeleteConfirm(false); }}
+          >
+            <div 
+              className="w-full max-w-sm rounded-[32px] bg-neutral-900/95 border border-white/20 p-5 shadow-2xl backdrop-blur-2xl animate-scaleUp text-right"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header Preview of Selected Message */}
+              <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-3">
+                <span className="text-[11px] text-white/50 font-medium">
+                  پیام {selectedMsgForMenu.sender === user ? 'شما' : partnerName} • {selectedMsgForMenu.time}
+                </span>
+                <button 
+                  onClick={() => { setSelectedMsgForMenu(null); setShowDeleteConfirm(false); }}
+                  className="p-1 text-white/40 hover:text-white rounded-full hover:bg-white/10"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Message Content Preview */}
+              <div className="p-3 rounded-2xl bg-white/5 border border-white/10 text-xs text-white/90 mb-3 max-h-24 overflow-y-auto lux-scroll leading-relaxed">
+                {selectedMsgForMenu.type === 'text' && selectedMsgForMenu.text}
+                {selectedMsgForMenu.type === 'audio' && '🎵 پیام صوتی اختصاصی'}
+                {selectedMsgForMenu.type === 'timed_image' && '⏳ عکس محوشونده تایم‌دار'}
+                {selectedMsgForMenu.type === 'image' && '🖼️ عکس یادگاری'}
+              </div>
+
+              {/* Quick Emoji Reactions */}
+              <div className="flex items-center justify-around py-2.5 px-3 rounded-2xl bg-white/5 border border-white/10 mb-3.5 text-2xl">
+                {['❤️', '😍', '😂', '🥺', '🔥', '👍'].map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() => {
+                      sendMessage('text', emoji, {
+                        replyTo: {
+                          id: selectedMsgForMenu.id,
+                          sender: selectedMsgForMenu.sender,
+                          text: selectedMsgForMenu.type === 'text' ? selectedMsgForMenu.text : 'پیام'
+                        }
+                      });
+                      setSelectedMsgForMenu(null);
+                    }}
+                    className="hover:scale-130 active:scale-90 transition-transform"
+                    title={`واکنش با ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+
+              {!showDeleteConfirm ? (
+                <div className="space-y-2">
+                  {/* Reply Action */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReplyingTo(selectedMsgForMenu);
+                      setSelectedMsgForMenu(null);
+                      setTimeout(() => textInputRef.current?.focus(), 150);
+                    }}
+                    className="w-full py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/15 flex items-center gap-3 text-white text-xs font-medium transition-all active:scale-98"
+                  >
+                    <div className="w-8 h-8 rounded-xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0">
+                      <Reply className="w-4 h-4 rotate-180" />
+                    </div>
+                    <div className="text-right flex-1">
+                      <p className="font-semibold text-white">پاسخ دادن (ریپلای)</p>
+                      <p className="text-[10px] text-white/50">سنجاق کردن پیام جهت ارسال پاسخ</p>
+                    </div>
+                  </button>
+
+                  {/* Copy Text Action (If Text) */}
+                  {selectedMsgForMenu.type === 'text' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(selectedMsgForMenu.text);
+                        setNudgeAlert('متن پیام کپی شد! 📋');
+                        setTimeout(() => setNudgeAlert(null), 2000);
+                        setSelectedMsgForMenu(null);
+                      }}
+                      className="w-full py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/15 flex items-center gap-3 text-white text-xs font-medium transition-all active:scale-98"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                        <Copy className="w-4 h-4" />
+                      </div>
+                      <div className="text-right flex-1">
+                        <p className="font-semibold text-white">کپی کردن متن</p>
+                        <p className="text-[10px] text-white/50">کپی متن پیام در حافظه گوشی</p>
+                      </div>
+                    </button>
+                  )}
+
+                  {/* Delete Action */}
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteConfirm(true)}
+                    className="w-full py-3 px-4 rounded-2xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 flex items-center gap-3 text-rose-300 text-xs font-medium transition-all active:scale-98"
+                  >
+                    <div className="w-8 h-8 rounded-xl bg-rose-500/30 text-rose-400 flex items-center justify-center shrink-0">
+                      <Trash2 className="w-4 h-4" />
+                    </div>
+                    <div className="text-right flex-1">
+                      <p className="font-semibold text-rose-300">پاک کردن پیام (حذف)</p>
+                      <p className="text-[10px] text-rose-300/60">حذف همزمان برای هر دو نفر یا از این گوشی</p>
+                    </div>
+                  </button>
+                </div>
+              ) : (
+                /* Delete Confirmation Options */
+                <div className="space-y-2.5 animate-fadeIn">
+                  <div className="p-2.5 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-center mb-1">
+                    <p className="text-xs font-semibold text-rose-300">
+                      نحوه حذف این پیام را انتخاب کنید:
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteMessage(selectedMsgForMenu.id, true)}
+                    className="w-full py-3 px-4 rounded-2xl bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white text-xs font-semibold shadow-lg shadow-rose-950/50 transition-all flex items-center justify-center gap-2 active:scale-98"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>حذف برای هر دو نفر (همزمان دوطرفه)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteMessage(selectedMsgForMenu.id, false)}
+                    className="w-full py-2.5 px-4 rounded-2xl bg-white/10 hover:bg-white/15 text-white/80 text-xs font-medium transition-all flex items-center justify-center gap-2 active:scale-98"
+                  >
+                    <span>حذف فقط برای من (در این گوشی)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteConfirm(false)}
+                    className="w-full py-2 px-4 rounded-2xl bg-transparent text-white/50 hover:text-white text-xs transition-all text-center"
+                  >
+                    انصراف
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
