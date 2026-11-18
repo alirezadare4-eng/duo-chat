@@ -8,6 +8,7 @@ import {
   Image as ImageIcon, 
   Palette, 
   Play, 
+  Pause,
   ShieldCheck, 
   Settings, 
   X, 
@@ -15,13 +16,13 @@ import {
   Upload, 
   RotateCcw, 
   Check, 
-  Cloud, 
   Phone, 
   LogOut, 
   Calendar,
-  Smile
+  Trash2
 } from 'lucide-react';
 import { initCloudSync, sendCloudMessage, sendCloudNudge, sendCloudTyping } from './cloudSync';
+import { compressImage, generateMessageId, formatSeconds } from './utils';
 
 const isLocal = typeof window !== 'undefined' && 
   (window.location.hostname === 'localhost' || window.location.hostname.startsWith('192.168.'));
@@ -56,14 +57,10 @@ export default function App() {
   const [myPhone, setMyPhone] = useState(() => localStorage.getItem('duo_my_phone') || '');
   const [user, setUser] = useState(() => localStorage.getItem('duo_user') || '');
 
-  // Relationship Start Date (Real days calculation)
+  // Relationship Start Date
   const [startDate, setStartDate] = useState(() => localStorage.getItem('duo_start_date') || '');
-  
-  // Custom Bio/Status for each user
-  const [myBio, setMyBio] = useState(() => localStorage.getItem('duo_my_bio') || '');
-  const [partnerBio, setPartnerBio] = useState(() => localStorage.getItem('duo_partner_bio') || '');
 
-  // UI state for login
+  // Login inputs
   const [loginInput, setLoginInput] = useState('');
   const [selectedRoleOnLogin, setSelectedRoleOnLogin] = useState('alireza');
   const [loginError, setLoginError] = useState('');
@@ -76,11 +73,21 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [cloudOnline, setCloudOnline] = useState(false);
 
-  // Live Partner Typing Status (Realtime)
+  // Live Typing Status
   const [partnerIsTyping, setPartnerIsTyping] = useState(false);
   const typingTimeoutRef = useRef(null);
 
-  // Clean empty messages
+  // Audio Playback Manager
+  const [activeAudioId, setActiveAudioId] = useState(null);
+  const [audioProgress, setAudioProgress] = useState(0);
+  const currentAudioRef = useRef(null);
+
+  // Recording State & Timer
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const recordIntervalRef = useRef(null);
+
+  // Messages state
   const [messages, setMessages] = useState(() => {
     const saved = localStorage.getItem('duo_messages');
     if (saved) {
@@ -93,7 +100,6 @@ export default function App() {
   });
 
   const [inputVal, setInputVal] = useState('');
-  const [isRecording, setIsRecording] = useState(false);
   const [nudgeAlert, setNudgeAlert] = useState(null);
   const [showHeartBurst, setShowHeartBurst] = useState(false);
 
@@ -102,10 +108,17 @@ export default function App() {
   const audioChunksRef = useRef([]);
   const fileInputRef = useRef(null);
   const bgInputRef = useRef(null);
+  const audioContextRef = useRef(null);
 
   const playChime = () => {
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume();
+      }
+      const ctx = audioContextRef.current;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
@@ -200,7 +213,7 @@ export default function App() {
     });
   }, [user]);
 
-  // Calculate REAL relationship days
+  // Calculate Real Anniversary Days
   const calculateRealDays = () => {
     if (!startDate) return null;
     try {
@@ -245,7 +258,6 @@ export default function App() {
   const partnerName = user === 'alireza' ? 'فاطمه من' : 'علیرضای من';
   const partnerInitial = user === 'alireza' ? 'ف' : 'ع';
 
-  // Handle typing indicator
   const handleInputChange = (e) => {
     setInputVal(e.target.value);
     sendCloudTyping(user);
@@ -259,7 +271,7 @@ export default function App() {
     const timeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
 
     const newMsg = {
-      id: Date.now().toString(),
+      id: generateMessageId(),
       sender: user,
       text: textToSend,
       time: timeStr,
@@ -285,10 +297,15 @@ export default function App() {
     setTimeout(() => setNudgeAlert(null), 3500);
   };
 
+  // Safe Voice Recording with Timer
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorderRef.current = new MediaRecorder(stream);
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm') 
+        ? 'audio/webm' 
+        : (MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : '');
+
+      mediaRecorderRef.current = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       audioChunksRef.current = [];
 
       mediaRecorderRef.current.ondataavailable = (e) => {
@@ -296,7 +313,7 @@ export default function App() {
       };
 
       mediaRecorderRef.current.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType || 'audio/ogg' });
         const reader = new FileReader();
         reader.readAsDataURL(audioBlob);
         reader.onloadend = () => {
@@ -307,36 +324,95 @@ export default function App() {
 
       mediaRecorderRef.current.start();
       setIsRecording(true);
+      setRecordSeconds(0);
+      recordIntervalRef.current = setInterval(() => {
+        setRecordSeconds((s) => s + 1);
+      }, 1000);
     } catch (err) {
-      alert('دسترسی به میکروفون داده نشد.');
+      alert('دسترسی به میکروفون داده نشد یا مسدود است.');
     }
   };
 
-  const stopRecording = () => {
+  const stopRecording = (shouldSend = true) => {
+    if (recordIntervalRef.current) clearInterval(recordIntervalRef.current);
     if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
+      if (shouldSend) {
+        mediaRecorderRef.current.stop();
+      } else {
+        // Cancel recording
+        mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
+      }
       setIsRecording(false);
+      setRecordSeconds(0);
     }
   };
 
-  const handleImageUpload = (e) => {
+  // Compressed Image Upload (handles 20MB photos smoothly)
+  const handleImageUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      sendMessage('image', reader.result);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressedBase64 = await compressImage(file, 1000, 0.72);
+      sendMessage('image', compressedBase64);
+    } catch (err) {
+      alert('خطا در بارگذاری تصویر. لطفا تصویر دیگری انتخاب کنید.');
+    }
+    e.target.value = '';
   };
 
-  const handleBgUpload = (e) => {
+  const handleBgUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setCustomBg(reader.result);
+    try {
+      const compressedBg = await compressImage(file, 1200, 0.75);
+      setCustomBg(compressedBg);
+    } catch (err) {
+      alert('خطا در انتخاب والپیپر.');
+    }
+    e.target.value = '';
+  };
+
+  // Audio Playback Manager (only 1 plays at a time, supports pause)
+  const toggleAudio = (msgId, audioSrc) => {
+    if (activeAudioId === msgId && currentAudioRef.current) {
+      if (!currentAudioRef.current.paused) {
+        currentAudioRef.current.pause();
+        setActiveAudioId(null);
+        return;
+      }
+    }
+
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+
+    const audio = new Audio(audioSrc);
+    currentAudioRef.current = audio;
+    setActiveAudioId(msgId);
+
+    audio.ontimeupdate = () => {
+      if (audio.duration) {
+        setAudioProgress((audio.currentTime / audio.duration) * 100);
+      }
     };
-    reader.readAsDataURL(file);
+
+    audio.onended = () => {
+      setActiveAudioId(null);
+      setAudioProgress(0);
+    };
+
+    audio.play().catch(() => {
+      setActiveAudioId(null);
+    });
+  };
+
+  const clearAllMessages = () => {
+    if (confirm('آیا مطمئن هستید که می‌خواهید تمام پیام‌ها را پاک کنید؟')) {
+      setMessages([]);
+      localStorage.removeItem('duo_messages');
+      setShowSettings(false);
+    }
   };
 
   const currentTheme = THEMES[themeIdx];
@@ -347,7 +423,7 @@ export default function App() {
   if (!myPhone || !user) {
     return (
       <div 
-        className={`flex justify-center items-center w-full min-h-screen p-4 select-none ${selectedFont}`}
+        className={`flex justify-center items-center w-full min-h-[100dvh] p-4 select-none ${selectedFont}`}
         style={{ backgroundColor: currentTheme.bg }}
       >
         <div className="relative w-full max-w-[390px] rounded-[36px] bg-[#120a1f]/90 border border-white/15 p-6 backdrop-blur-2xl shadow-2xl flex flex-col items-center text-center">
@@ -420,11 +496,10 @@ export default function App() {
   // ----------------------------------------------------
   return (
     <div 
-      className={`flex justify-center items-center w-full min-h-screen p-0 select-none ${selectedFont}`}
+      className={`flex justify-center items-center w-full min-h-[100dvh] p-0 select-none ${selectedFont}`}
       style={{ backgroundColor: currentTheme.bg }}
     >
-      {/* Full-bleed Mobile Container */}
-      <div className="relative w-full sm:max-w-[430px] h-screen bg-[#0d0915] sm:rounded-[36px] overflow-hidden flex flex-col shadow-2xl border-0 sm:border sm:border-white/10">
+      <div className="relative w-full sm:max-w-[430px] h-[100dvh] bg-[#0d0915] sm:rounded-[36px] overflow-hidden flex flex-col shadow-2xl border-0 sm:border sm:border-white/10">
         
         {/* Custom Wallpaper Layer */}
         {customBg ? (
@@ -445,9 +520,8 @@ export default function App() {
           </>
         )}
 
-        {/* Top Info Bar (Clean & Real) */}
+        {/* Real Top Header Bar */}
         <div className="relative z-20 px-4 pt-3 pb-1 flex items-center justify-between text-xs">
-          {/* Real Anniversary Days or Private badge */}
           {realDays !== null ? (
             <div 
               onClick={() => setShowSettings(true)}
@@ -466,7 +540,6 @@ export default function App() {
             </div>
           )}
 
-          {/* User Account / Logout */}
           <div className="flex items-center gap-2">
             <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -484,7 +557,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Real Profile Header */}
+        {/* Real Profile Card Header */}
         <div className="relative z-20 px-4 py-2.5 mx-3 mt-1 rounded-2xl glass-panel flex items-center justify-between shadow-xl">
           <div className="flex items-center gap-3">
             <div className="relative cursor-pointer" onClick={() => setShowHeartBurst(true)}>
@@ -501,7 +574,6 @@ export default function App() {
                 <Heart className="w-3.5 h-3.5 fill-rose-500 text-rose-500 heart-pulse" />
               </div>
 
-              {/* REAL Status: Live Typing or Online */}
               {partnerIsTyping ? (
                 <div className="flex items-center gap-1.5 text-[10px] text-pink-300 font-medium mt-0.5 animate-pulse">
                   <span>در حال نوشتن</span>
@@ -555,6 +627,8 @@ export default function App() {
           ) : (
             messages.map((m) => {
               const isMe = m.sender === user;
+              const isAudioPlaying = activeAudioId === m.id;
+
               return (
                 <div key={m.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1`}>
                   <div className={`max-w-[82%] rounded-[22px] ${isMe ? 'rounded-tl-md glass-bubble-out text-white' : 'rounded-tr-md glass-bubble-in text-white/95'} p-3.5 shadow-md`}>
@@ -565,26 +639,38 @@ export default function App() {
 
                     {m.type === 'image' && (
                       <div className="rounded-xl overflow-hidden border border-white/20 mb-1">
-                        <img src={m.text} alt="یادگاری" className="max-h-56 w-full object-cover" />
+                        <img 
+                          src={m.text} 
+                          alt="عکس یادگاری" 
+                          loading="lazy"
+                          className="max-h-56 w-full object-cover cursor-pointer"
+                          onClick={() => window.open(m.text, '_blank')}
+                        />
                       </div>
                     )}
 
                     {m.type === 'audio' && (
                       <div className="flex items-center gap-3 w-56">
                         <button 
-                          onClick={() => {
-                            const audio = new Audio(m.text);
-                            audio.play();
-                          }}
-                          className="w-9 h-9 rounded-xl bg-white/20 hover:bg-white/30 flex items-center justify-center text-white active:scale-95"
+                          onClick={() => toggleAudio(m.id, m.text)}
+                          className="w-9 h-9 rounded-xl bg-white/20 hover:bg-white/30 flex items-center justify-center text-white active:scale-95 transition-all shadow-sm shrink-0"
                         >
-                          <Play className="w-4 h-4 ml-0.5 fill-current" />
+                          {isAudioPlaying ? (
+                            <Pause className="w-4 h-4 fill-current" />
+                          ) : (
+                            <Play className="w-4 h-4 ml-0.5 fill-current" />
+                          )}
                         </button>
                         <div className="flex-1">
                           <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
-                            <div className="w-1/2 h-full bg-white rounded-full animate-pulse"></div>
+                            <div 
+                              className={`h-full bg-white rounded-full transition-all ${isAudioPlaying ? 'opacity-100' : 'opacity-60'}`}
+                              style={{ width: isAudioPlaying ? `${audioProgress}%` : '40%' }}
+                            />
                           </div>
-                          <span className="text-[9px] text-white/70 mt-1 block">پیام صوتی اختصاصی</span>
+                          <span className="text-[9px] text-white/70 mt-1 block">
+                            {isAudioPlaying ? 'در حال پخش...' : 'پیام صوتی اختصاصی'}
+                          </span>
                         </div>
                       </div>
                     )}
@@ -618,68 +704,98 @@ export default function App() {
           </div>
         )}
 
-        {/* Input Bar */}
-        <div className="relative z-20 p-3 bg-black/60 backdrop-blur-2xl border-t border-white/10 pb-5 sm:pb-3">
-          <form 
-            onSubmit={(e) => {
-              e.preventDefault();
-              sendMessage('text');
-            }}
-            className="flex items-center gap-2"
-          >
-            <button 
-              type="button" 
-              onClick={() => sendMessage('text', '🫀❤️ دلتنگتم بی‌نهایت...')}
-              className="p-2.5 rounded-2xl glass-panel text-rose-400 hover:text-rose-300 active:scale-95 transition-all shadow-md"
-              title="ارسال قلب"
-            >
-              ❤️
-            </button>
-
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              onChange={handleImageUpload} 
-              accept="image/*" 
-              className="hidden" 
-            />
-            <button 
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="p-2.5 rounded-2xl glass-panel text-white/70 hover:text-white active:scale-95 transition-all shadow-md"
-              title="ارسال عکس"
-            >
-              <ImageIcon className="w-4 h-4" />
-            </button>
-
-            <div className="flex-1 relative">
-              <input 
-                type="text" 
-                value={inputVal}
-                onChange={handleInputChange}
-                placeholder={`پیامی برای ${partnerName}...`}
-                className="w-full glass-input rounded-2xl px-4 py-2.5 text-xs text-white placeholder-white/40 focus:outline-none focus:ring-1 focus:ring-pink-500/60 transition-all shadow-inner"
-              />
+        {/* Input & Voice Recording Deck */}
+        <div className="relative z-20 p-3 bg-black/70 backdrop-blur-2xl border-t border-white/10 pb-5 sm:pb-3">
+          
+          {/* Active Voice Recording Pill UI */}
+          {isRecording ? (
+            <div className="flex items-center justify-between bg-rose-950/60 border border-rose-500/40 rounded-2xl px-4 py-2.5 animate-pulse">
+              <div className="flex items-center gap-2.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span>
+                <span className="text-xs font-mono font-bold text-rose-300">{formatSeconds(recordSeconds)}</span>
+                <span className="text-[11px] text-white/80 font-medium">در حال ضبط صدا...</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button 
+                  type="button" 
+                  onClick={() => stopRecording(false)}
+                  className="px-2.5 py-1 rounded-xl bg-white/10 hover:bg-white/20 text-[10px] text-white/70"
+                >
+                  لغو
+                </button>
+                <button 
+                  type="button" 
+                  onClick={() => stopRecording(true)}
+                  className="p-2 rounded-xl bg-rose-500 text-white active:scale-95 shadow-md"
+                  title="ارسال وویس"
+                >
+                  <Send className="w-4 h-4 rotate-180" />
+                </button>
+              </div>
             </div>
-
-            {inputVal.trim() ? (
+          ) : (
+            <form 
+              onSubmit={(e) => {
+                e.preventDefault();
+                sendMessage('text');
+              }}
+              className="flex items-center gap-2"
+            >
               <button 
-                type="submit" 
-                className="p-2.5 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 text-white active:scale-95 transition-all shadow-lg flex items-center justify-center shrink-0"
+                type="button" 
+                onClick={() => sendMessage('text', '🫀❤️ دلتنگتم بی‌نهایت...')}
+                className="p-2.5 rounded-2xl glass-panel text-rose-400 hover:text-rose-300 active:scale-95 transition-all shadow-md shrink-0"
+                title="ارسال قلب"
               >
-                <Send className="w-4 h-4 rotate-180" />
+                ❤️
               </button>
-            ) : (
+
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                onChange={handleImageUpload} 
+                accept="image/*" 
+                className="hidden" 
+              />
               <button 
                 type="button"
-                onClick={isRecording ? stopRecording : startRecording}
-                className={`p-2.5 rounded-2xl ${isRecording ? 'bg-rose-600 animate-pulse' : 'glass-panel text-white/80'} text-white active:scale-95 transition-all shadow-lg flex items-center justify-center shrink-0`}
-                title={isRecording ? 'پایان ضبط' : 'ضبط وویس'}
+                onClick={() => fileInputRef.current?.click()}
+                className="p-2.5 rounded-2xl glass-panel text-white/70 hover:text-white active:scale-95 transition-all shadow-md shrink-0"
+                title="ارسال عکس"
               >
-                {isRecording ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                <ImageIcon className="w-4 h-4" />
               </button>
-            )}
-          </form>
+
+              <div className="flex-1 relative">
+                <input 
+                  type="text" 
+                  value={inputVal}
+                  onChange={handleInputChange}
+                  placeholder={`پیامی برای ${partnerName}...`}
+                  className="w-full glass-input rounded-2xl px-4 py-2.5 text-xs text-white placeholder-white/40 focus:outline-none focus:ring-1 focus:ring-pink-500/60 transition-all shadow-inner"
+                />
+              </div>
+
+              {inputVal.trim() ? (
+                <button 
+                  type="submit" 
+                  className="p-2.5 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 text-white active:scale-95 transition-all shadow-lg flex items-center justify-center shrink-0"
+                >
+                  <Send className="w-4 h-4 rotate-180" />
+                </button>
+              ) : (
+                <button 
+                  type="button"
+                  onClick={startRecording}
+                  className="p-2.5 rounded-2xl glass-panel text-white/80 active:scale-95 transition-all shadow-lg flex items-center justify-center shrink-0"
+                  title="ضبط وویس"
+                >
+                  <Mic className="w-4 h-4" />
+                </button>
+              )}
+            </form>
+          )}
+
         </div>
 
         {/* Customization Settings Bottom Sheet */}
@@ -825,6 +941,17 @@ export default function App() {
                     />
                   </div>
                 )}
+              </div>
+
+              {/* Clear Chat History Option */}
+              <div className="mt-5 pt-4 border-t border-white/10">
+                <button 
+                  onClick={clearAllMessages}
+                  className="w-full py-2.5 px-4 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>پاک‌سازی تاریخچه پیام‌ها</span>
+                </button>
               </div>
 
               <button 

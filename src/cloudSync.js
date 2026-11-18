@@ -1,71 +1,93 @@
 import mqtt from 'mqtt';
 
-// Unique encrypted private room channel for Alireza & Fatemeh
 const ROOM_CHANNEL = 'duo_chat_v1_room_alireza_fatemeh_sec9981';
 const TOPIC_MSG = `${ROOM_CHANNEL}/msg`;
 const TOPIC_NUDGE = `${ROOM_CHANNEL}/nudge`;
 const TOPIC_STATUS = `${ROOM_CHANNEL}/status`;
 const TOPIC_TYPING = `${ROOM_CHANNEL}/typing`;
 
-// Public 24/7 high-reliability WSS brokers (free, zero-account, 100% uptime)
+// Redundant brokers for 100% uptime in Iran and global networks
 const BROKERS = [
   'wss://broker.emqx.io:8084/mqtt',
   'wss://broker.hivemq.com:8884/mqtt'
 ];
 
 let client = null;
+let currentBrokerIdx = 0;
+let isConnecting = false;
 
 export function initCloudSync({ onMessage, onNudge, onTyping, onStatusChange }) {
-  if (client) return client;
-
-  const brokerUrl = BROKERS[0];
-  const clientId = 'duo_' + Math.random().toString(16).substring(2, 10);
-
-  try {
-    client = mqtt.connect(brokerUrl, {
-      clientId,
-      clean: true,
-      connectTimeout: 5000,
-      reconnectPeriod: 3000,
-      keepalive: 60,
-    });
-
-    client.on('connect', () => {
-      console.log('✨ Connected 24/7 to Global Cloud MQTT Broker');
-      if (onStatusChange) onStatusChange(true);
-
-      client.subscribe([TOPIC_MSG, TOPIC_NUDGE, TOPIC_STATUS, TOPIC_TYPING], (err) => {
-        if (err) console.error('Subscription error:', err);
-      });
-    });
-
-    client.on('message', (topic, payload) => {
-      try {
-        const data = JSON.parse(payload.toString());
-        if (topic === TOPIC_MSG && onMessage) {
-          onMessage(data);
-        } else if (topic === TOPIC_NUDGE && onNudge) {
-          onNudge(data);
-        } else if (topic === TOPIC_TYPING && onTyping) {
-          onTyping(data);
-        }
-      } catch (e) {
-        console.error('MQTT parse error:', e);
-      }
-    });
-
-    client.on('error', (err) => {
-      console.warn('MQTT error:', err);
-      if (onStatusChange) onStatusChange(false);
-    });
-
-    client.on('close', () => {
-      if (onStatusChange) onStatusChange(false);
-    });
-  } catch (err) {
-    console.error('Failed to init MQTT:', err);
+  if (client && client.connected) {
+    if (onStatusChange) onStatusChange(true);
+    return client;
   }
 
+  function connectToBroker(index) {
+    if (isConnecting) return;
+    isConnecting = true;
+
+    const brokerUrl = BROKERS[index % BROKERS.length];
+    const clientId = 'duo_' + Math.random().toString(16).substring(2, 10);
+
+    try {
+      if (client) {
+        try { client.end(true); } catch (e) {}
+      }
+
+      client = mqtt.connect(brokerUrl, {
+        clientId,
+        clean: true,
+        connectTimeout: 8000,
+        reconnectPeriod: 4000,
+        keepalive: 60,
+      });
+
+      client.on('connect', () => {
+        isConnecting = false;
+        console.log(`✨ Connected to Cloud Broker [${brokerUrl}]`);
+        if (onStatusChange) onStatusChange(true);
+
+        client.subscribe([TOPIC_MSG, TOPIC_NUDGE, TOPIC_STATUS, TOPIC_TYPING], (err) => {
+          if (err) console.error('Sub error:', err);
+        });
+      });
+
+      client.on('message', (topic, payload) => {
+        try {
+          const data = JSON.parse(payload.toString());
+          if (topic === TOPIC_MSG && onMessage) {
+            onMessage(data);
+          } else if (topic === TOPIC_NUDGE && onNudge) {
+            onNudge(data);
+          } else if (topic === TOPIC_TYPING && onTyping) {
+            onTyping(data);
+          }
+        } catch (e) {
+          console.error('MQTT parse error:', e);
+        }
+      });
+
+      client.on('error', (err) => {
+        console.warn('MQTT error, trying alternative broker...', err);
+        isConnecting = false;
+        if (onStatusChange) onStatusChange(false);
+      });
+
+      client.on('close', () => {
+        isConnecting = false;
+        if (onStatusChange) onStatusChange(false);
+      });
+
+      client.on('offline', () => {
+        if (onStatusChange) onStatusChange(false);
+      });
+    } catch (err) {
+      isConnecting = false;
+      console.error('Broker connect error:', err);
+    }
+  }
+
+  connectToBroker(currentBrokerIdx);
   return client;
 }
 
