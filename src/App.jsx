@@ -17,8 +17,10 @@ import {
   RotateCcw,
   Check,
   Cloud,
-  Globe,
-  Radio
+  Phone,
+  LogOut,
+  Lock,
+  Sparkles
 } from 'lucide-react';
 import { initCloudSync, sendCloudMessage, sendCloudNudge } from './cloudSync';
 
@@ -51,7 +53,19 @@ const FONTS = [
 ];
 
 export default function App() {
-  const [user, setUser] = useState(() => localStorage.getItem('duo_user') || 'alireza');
+  // Authentication by Phone Number
+  const [myPhone, setMyPhone] = useState(() => localStorage.getItem('duo_my_phone') || '');
+  const [user, setUser] = useState(() => localStorage.getItem('duo_user') || '');
+  
+  // Custom Phone Setup (Phone numbers of Alireza and Fatemeh)
+  const [alirezaPhone, setAlirezaPhone] = useState(() => localStorage.getItem('duo_phone_alireza') || '');
+  const [fatemehPhone, setFatemehPhone] = useState(() => localStorage.getItem('duo_phone_fatemeh') || '');
+
+  // UI state for login screen
+  const [loginInput, setLoginInput] = useState('');
+  const [selectedRoleOnLogin, setSelectedRoleOnLogin] = useState('alireza');
+  const [loginError, setLoginError] = useState('');
+
   const [selectedFont, setSelectedFont] = useState(() => localStorage.getItem('duo_font') || 'font-vazir');
   const [themeIdx, setThemeIdx] = useState(() => Number(localStorage.getItem('duo_theme_idx')) || 0);
   const [customBg, setCustomBg] = useState(() => localStorage.getItem('duo_custom_bg') || null);
@@ -59,27 +73,17 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [cloudOnline, setCloudOnline] = useState(false);
 
+  // Messages: completely EMPTY by default (no pre-written fake messages!)
   const [messages, setMessages] = useState(() => {
     const saved = localStorage.getItem('duo_messages');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
+      try { 
+        const parsed = JSON.parse(saved);
+        // Clean out any old mock messages
+        return parsed.filter(m => m.id !== '1' && m.id !== '2');
+      } catch (e) {}
     }
-    return [
-      {
-        id: '1',
-        sender: 'fatemeh',
-        text: 'سلام عشقم ❤️ برنامه‌مون بالاخره بالا اومد؟ چقدر قشنگ شده محیطش! ✨',
-        time: '13:28',
-        type: 'text'
-      },
-      {
-        id: '2',
-        sender: 'alireza',
-        text: 'سلام زندگی من! آره کاملاً رایگان، بدون واسطه و امن بین خودمونه 🔒🫂',
-        time: '13:29',
-        type: 'text'
-      }
-    ];
+    return [];
   });
 
   const [inputVal, setInputVal] = useState('');
@@ -115,8 +119,10 @@ export default function App() {
   }, [messages]);
 
   useEffect(() => {
-    localStorage.setItem('duo_user', user);
-    socket.emit('register_user', user);
+    if (user) {
+      localStorage.setItem('duo_user', user);
+      socket.emit('register_user', user);
+    }
   }, [user]);
 
   useEffect(() => {
@@ -139,8 +145,10 @@ export default function App() {
     localStorage.setItem('duo_bg_dim', bgDim);
   }, [bgDim]);
 
-  // Connect 24/7 Global Cloud Sync (Zero Setup, No PC needed!)
+  // Connect 24/7 Global Cloud Sync
   useEffect(() => {
+    if (!user) return;
+
     initCloudSync({
       onStatusChange: (status) => {
         setCloudOnline(status);
@@ -168,33 +176,35 @@ export default function App() {
     });
   }, [user]);
 
-  // Fallback Local Socket
-  useEffect(() => {
-    socket.on('receive_message', (msg) => {
-      setMessages((prev) => {
-        if (prev.some((m) => m.id === msg.id)) return prev;
-        return [...prev, msg];
-      });
-      playChime();
-      if ('vibrate' in navigator) navigator.vibrate(200);
-    });
+  const handleLogin = (e) => {
+    e.preventDefault();
+    const phone = loginInput.trim();
+    if (!phone) {
+      setLoginError('لطفاً شماره موبایل خود را وارد کنید.');
+      return;
+    }
+    if (phone.length < 10) {
+      setLoginError('شماره موبایل وارد شده معتبر نیست.');
+      return;
+    }
 
-    socket.on('receive_nudge', (sender) => {
-      if (sender !== user) {
-        setNudgeAlert(`${sender === 'alireza' ? 'علیرضا' : 'فاطمه'} برات تپش قلب فرستاد! 💓`);
-        setShowHeartBurst(true);
-        playChime();
-        if ('vibrate' in navigator) navigator.vibrate([150, 80, 150, 80, 400]);
-        setTimeout(() => setShowHeartBurst(false), 1200);
-        setTimeout(() => setNudgeAlert(null), 4000);
-      }
-    });
+    const currentRole = selectedRoleOnLogin; // 'alireza' or 'fatemeh'
+    localStorage.setItem('duo_my_phone', phone);
+    localStorage.setItem('duo_user', currentRole);
+    setMyPhone(phone);
+    setUser(currentRole);
+    setLoginError('');
+  };
 
-    return () => {
-      socket.off('receive_message');
-      socket.off('receive_nudge');
-    };
-  }, [user]);
+  const handleLogout = () => {
+    if (confirm('آیا می‌خواهید از حساب خارج شوید و شماره را تغییر دهید؟')) {
+      localStorage.removeItem('duo_my_phone');
+      localStorage.removeItem('duo_user');
+      setMyPhone('');
+      setUser('');
+      setShowSettings(false);
+    }
+  };
 
   const partnerName = user === 'alireza' ? 'فاطمه من' : 'علیرضای من';
   const partnerInitial = user === 'alireza' ? 'ف' : 'ع';
@@ -220,9 +230,7 @@ export default function App() {
     setMessages((prev) => [...prev, newMsg]);
     if (type === 'text') setInputVal('');
 
-    // Send via 24/7 Global Cloud
     sendCloudMessage(newMsg);
-    // Also broadcast to local socket
     socket.emit('send_message', newMsg);
   };
 
@@ -294,6 +302,85 @@ export default function App() {
 
   const currentTheme = THEMES[themeIdx];
 
+  // ----------------------------------------------------
+  // LOGIN SCREEN (اگر شماره هنوز وارد نشده باشد)
+  // ----------------------------------------------------
+  if (!myPhone || !user) {
+    return (
+      <div 
+        className={`flex justify-center items-center w-full min-h-screen p-4 select-none ${selectedFont}`}
+        style={{ backgroundColor: currentTheme.bg }}
+      >
+        <div className="relative w-full max-w-[390px] rounded-[36px] bg-[#120a1f]/90 border border-white/15 p-6 backdrop-blur-2xl shadow-2xl flex flex-col items-center text-center">
+          
+          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-pink-500 via-rose-500 to-purple-600 flex items-center justify-center text-3xl shadow-xl border border-white/20 mb-4 animate-bounce">
+            🔐
+          </div>
+
+          <h2 className="text-lg font-bold text-white mb-1">ورود به چت اختصاصی</h2>
+          <p className="text-xs text-pink-200/80 mb-6">فضای کاملاً خصوصی و رمزشده دونفره</p>
+
+          <form onSubmit={handleLogin} className="w-full space-y-4">
+            
+            {/* Role Selection Tabs */}
+            <div className="bg-black/40 p-1.5 rounded-2xl border border-white/10 flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setSelectedRoleOnLogin('alireza')}
+                className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${selectedRoleOnLogin === 'alireza' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow' : 'text-white/60 hover:text-white'}`}
+              >
+                من علیرضا هستم 👨‍💻
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedRoleOnLogin('fatemeh')}
+                className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${selectedRoleOnLogin === 'fatemeh' ? 'bg-gradient-to-r from-rose-500 to-pink-500 text-white shadow' : 'text-white/60 hover:text-white'}`}
+              >
+                من فاطمه هستم 🌸
+              </button>
+            </div>
+
+            {/* Phone Number Input */}
+            <div className="relative text-right">
+              <label className="text-[11px] text-white/70 block mb-1.5">شماره موبایل شما:</label>
+              <div className="relative">
+                <input 
+                  type="tel"
+                  dir="ltr"
+                  placeholder="09..."
+                  value={loginInput}
+                  onChange={(e) => setLoginInput(e.target.value)}
+                  className="w-full bg-black/40 border border-white/15 rounded-2xl px-4 py-3 text-sm text-center font-mono text-white placeholder-white/30 focus:outline-none focus:border-pink-500 transition-all"
+                />
+                <Phone className="w-4 h-4 text-white/40 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              </div>
+            </div>
+
+            {loginError && (
+              <p className="text-[11px] text-rose-400 font-medium">{loginError}</p>
+            )}
+
+            <button 
+              type="submit"
+              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-pink-500 via-rose-500 to-purple-600 text-white font-bold text-xs shadow-lg active:scale-95 transition-all mt-2"
+            >
+              ورود به فضای گفتگو ✨
+            </button>
+          </form>
+
+          <div className="mt-6 flex items-center gap-1.5 text-[10px] text-emerald-400/80 font-medium">
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>رمزنگاری اختصاصی • بدون واسطه و بدون ردپا</span>
+          </div>
+
+        </div>
+      </div>
+    );
+  }
+
+  // ----------------------------------------------------
+  // MAIN CHAT SCREEN
+  // ----------------------------------------------------
   return (
     <div 
       className={`flex justify-center items-center w-full min-h-screen p-0 sm:p-4 select-none ${selectedFont}`}
@@ -340,22 +427,20 @@ export default function App() {
           <div className="flex items-center gap-1.5 text-[10px]">
             <span className="flex items-center gap-1 text-emerald-400 font-medium">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>کلود ۲۴ ساعته فعال (مستقل از سیستم)</span>
+              <span>کلود ۲۴ ساعته فعال</span>
             </span>
           </div>
 
-          <div className="flex items-center bg-black/40 p-1 rounded-full border border-white/10 backdrop-blur-md">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-white/70 font-medium">
+              {user === 'alireza' ? 'حساب: علیرضا' : 'حساب: فاطمه'}
+            </span>
             <button 
-              onClick={() => setUser('alireza')}
-              className={`px-3 py-0.5 rounded-full text-[10px] font-bold transition-all ${user === 'alireza' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow' : 'text-white/60'}`}
+              onClick={handleLogout}
+              title="خروج و تعویض شماره"
+              className="text-white/40 hover:text-rose-400 transition-colors p-1"
             >
-              علیرضا
-            </button>
-            <button 
-              onClick={() => setUser('fatemeh')}
-              className={`px-3 py-0.5 rounded-full text-[10px] font-bold transition-all ${user === 'fatemeh' ? 'bg-gradient-to-r from-blue-500 to-cyan-600 text-white shadow' : 'text-white/60'}`}
-            >
-              فاطمه
+              <LogOut className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
@@ -400,51 +485,65 @@ export default function App() {
         </div>
 
         {/* Message Stream */}
-        <div className="relative z-10 flex-1 px-4 py-3 overflow-y-auto space-y-3 lux-scroll">
-          {messages.map((m) => {
-            const isMe = m.sender === user;
-            return (
-              <div key={m.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1`}>
-                <div className={`max-w-[82%] rounded-[22px] ${isMe ? 'rounded-tl-md glass-bubble-out text-white' : 'rounded-tr-md glass-bubble-in text-white/95'} p-3.5 shadow-md`}>
-                  
-                  {m.type === 'text' && (
-                    <p className="text-xs leading-relaxed font-normal">{m.text}</p>
-                  )}
+        <div className="relative z-10 flex-1 px-4 py-3 overflow-y-auto space-y-3 lux-scroll flex flex-col">
+          
+          {/* Empty State when no messages yet */}
+          {messages.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-white/50 space-y-3">
+              <div className="w-14 h-14 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-2xl animate-pulse">
+                💌
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-white/80">هنوز پیامی وجود ندارد</p>
+                <p className="text-[10px] text-white/40 mt-1">اولین پیام را برای {partnerName} بنویسید و ارسال کنید! ❤️</p>
+              </div>
+            </div>
+          ) : (
+            messages.map((m) => {
+              const isMe = m.sender === user;
+              return (
+                <div key={m.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1`}>
+                  <div className={`max-w-[82%] rounded-[22px] ${isMe ? 'rounded-tl-md glass-bubble-out text-white' : 'rounded-tr-md glass-bubble-in text-white/95'} p-3.5 shadow-md`}>
+                    
+                    {m.type === 'text' && (
+                      <p className="text-xs leading-relaxed font-normal">{m.text}</p>
+                    )}
 
-                  {m.type === 'image' && (
-                    <div className="rounded-xl overflow-hidden border border-white/20 mb-1">
-                      <img src={m.text} alt="یادگاری" className="max-h-56 w-full object-cover" />
-                    </div>
-                  )}
-
-                  {m.type === 'audio' && (
-                    <div className="flex items-center gap-3 w-56">
-                      <button 
-                        onClick={() => {
-                          const audio = new Audio(m.text);
-                          audio.play();
-                        }}
-                        className="w-9 h-9 rounded-xl bg-white/20 hover:bg-white/30 flex items-center justify-center text-white active:scale-95"
-                      >
-                        <Play className="w-4 h-4 ml-0.5 fill-current" />
-                      </button>
-                      <div className="flex-1">
-                        <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
-                          <div className="w-1/2 h-full bg-white rounded-full animate-pulse"></div>
-                        </div>
-                        <span className="text-[9px] text-white/70 mt-1 block">پیام صوتی اختصاصی</span>
+                    {m.type === 'image' && (
+                      <div className="rounded-xl overflow-hidden border border-white/20 mb-1">
+                        <img src={m.text} alt="یادگاری" className="max-h-56 w-full object-cover" />
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  <div className={`flex items-center justify-end gap-1 mt-1 text-[9px] ${isMe ? 'text-white/80' : 'text-white/40'} font-mono`}>
-                    <span>{m.time}</span>
-                    {isMe && <span className="font-bold">✓✓</span>}
+                    {m.type === 'audio' && (
+                      <div className="flex items-center gap-3 w-56">
+                        <button 
+                          onClick={() => {
+                            const audio = new Audio(m.text);
+                            audio.play();
+                          }}
+                          className="w-9 h-9 rounded-xl bg-white/20 hover:bg-white/30 flex items-center justify-center text-white active:scale-95"
+                        >
+                          <Play className="w-4 h-4 ml-0.5 fill-current" />
+                        </button>
+                        <div className="flex-1">
+                          <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
+                            <div className="w-1/2 h-full bg-white rounded-full animate-pulse"></div>
+                          </div>
+                          <span className="text-[9px] text-white/70 mt-1 block">پیام صوتی اختصاصی</span>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className={`flex items-center justify-end gap-1 mt-1 text-[9px] ${isMe ? 'text-white/80' : 'text-white/40'} font-mono`}>
+                      <span>{m.time}</span>
+                      {isMe && <span className="font-bold">✓✓</span>}
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
           <div ref={messagesEndRef} />
         </div>
 
@@ -549,13 +648,19 @@ export default function App() {
                 </button>
               </div>
 
-              {/* 24/7 Cloud Status Info */}
-              <div className="mt-4 p-3 rounded-2xl bg-emerald-950/40 border border-emerald-500/30 flex items-center gap-2.5">
-                <Cloud className="w-5 h-5 text-emerald-400 shrink-0" />
+              {/* Account / Phone Info */}
+              <div className="mt-4 p-3 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
                 <div>
-                  <h4 className="text-xs font-bold text-emerald-400">کلود ۲۴ ساعته فعال است</h4>
-                  <p className="text-[10px] text-white/70">نیازی به هیچ ثبت‌نام یا روشن بودن کامپیوتر نیست؛ پیام‌ها مستقیماً در بستر ابری امن جهانی منتقل می‌شوند.</p>
+                  <span className="text-[10px] text-white/50 block">شماره فعال در این گوشی:</span>
+                  <span className="text-xs font-mono font-bold text-pink-300">{myPhone} ({user === 'alireza' ? 'علیرضا' : 'فاطمه'})</span>
                 </div>
+                <button 
+                  onClick={handleLogout}
+                  className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 text-xs font-semibold flex items-center gap-1 transition-all"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>تغییر شماره</span>
+                </button>
               </div>
 
               {/* Font Selection Section */}
