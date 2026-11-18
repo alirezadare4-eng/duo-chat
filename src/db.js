@@ -92,3 +92,4 @@ export async function clearStore(storeName) {
     return false;
   }
 }
+

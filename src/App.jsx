@@ -7,7 +7,7 @@ import {
   Image as ImageIcon, 
   Palette, 
   Play, 
-  Pause,
+  Pause, 
   ShieldCheck, 
   Settings, 
   X, 
@@ -17,24 +17,27 @@ import {
   Check, 
   Phone, 
   LogOut, 
-  Calendar,
-  Trash2,
-  MessageCircle,
-  BookHeart,
-  Music,
-  Plus,
-  SkipForward,
-  SkipBack,
-  Volume2,
-  Film
+  Calendar, 
+  Trash2, 
+  MessageCircle, 
+  BookHeart, 
+  Music, 
+  Plus, 
+  SkipForward, 
+  SkipBack, 
+  Clock, 
+  Flame, 
+  Eye, 
+  Lock 
 } from 'lucide-react';
 import { 
   initCloudSync, 
   sendCloudMessage, 
   sendCloudNudge, 
-  sendCloudTyping,
-  sendCloudMemory,
-  sendCloudPlaylist
+  sendCloudTyping, 
+  sendCloudMemory, 
+  sendCloudPlaylist,
+  sendCloudDelete 
 } from './cloudSync';
 import { compressImage, generateMessageId, formatSeconds } from './utils';
 import { getAllFromStore, saveToStore, deleteFromStore, clearStore } from './db';
@@ -67,8 +70,16 @@ const FONTS = [
   { id: 'font-system', name: 'فونت سیستم', preview: 'چت دونفره' }
 ];
 
+const TIMER_OPTIONS = [
+  { label: 'دائمی', value: 0, icon: '♾️' },
+  { label: 'یک‌بار مصرف', value: 'once', icon: '👁️' },
+  { label: '۵ ثانیه', value: 5, icon: '⏱️' },
+  { label: '۱۰ ثانیه', value: 10, icon: '⏱️' },
+  { label: '۳۰ ثانیه', value: 30, icon: '⏱️' },
+  { label: '۱ دقیقه', value: 60, icon: '⏱️' }
+];
+
 export default function App() {
-  // Navigation Tabs: 'chat' | 'memories' | 'playlist'
   const [activeTab, setActiveTab] = useState('chat');
 
   // Authentication
@@ -91,7 +102,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [cloudOnline, setCloudOnline] = useState(false);
 
-  // Live Typing Status
+  // Live Partner Typing Status
   const [partnerIsTyping, setPartnerIsTyping] = useState(false);
   const typingTimeoutRef = useRef(null);
 
@@ -107,6 +118,15 @@ export default function App() {
 
   // Messages (IndexedDB)
   const [messages, setMessages] = useState([]);
+
+  // Disappearing Photo Send Modal
+  const [pendingImage, setPendingImage] = useState(null);
+  const [selectedTimer, setSelectedTimer] = useState(0); // 0 = permanent
+
+  // Disappearing Photo Fullscreen Viewer
+  const [activeViewingPhoto, setActiveViewingPhoto] = useState(null);
+  const [viewRemainingSeconds, setViewRemainingSeconds] = useState(0);
+  const viewCountdownRef = useRef(null);
 
   // Memories Diary State (IndexedDB)
   const [memories, setMemories] = useState([]);
@@ -168,7 +188,6 @@ export default function App() {
       if (items && items.length > 0) {
         setPlaylist(items);
       } else {
-        // Sample starter playlist if empty
         const defaultTracks = [
           {
             id: 'sample_1',
@@ -283,11 +302,23 @@ export default function App() {
         playChime();
         setNudgeAlert(`آهنگ «${track.title}» به پلی‌لیست مشترک اضافه شد! 🎵`);
         setTimeout(() => setNudgeAlert(null), 3500);
+      },
+      onDeleteMessage: ({ id }) => {
+        // Mark message as expired on both devices
+        setMessages((prev) => 
+          prev.map((m) => {
+            if (m.id === id) {
+              const updated = { ...m, expired: true, text: '' };
+              saveToStore('messages', updated);
+              return updated;
+            }
+            return m;
+          })
+        );
       }
     });
   }, [user]);
 
-  // Calculate Real Anniversary Days
   const calculateRealDays = () => {
     if (!startDate) return null;
     try {
@@ -337,7 +368,7 @@ export default function App() {
     sendCloudTyping(user);
   };
 
-  const sendMessage = async (type = 'text', content = '') => {
+  const sendMessage = async (type = 'text', content = '', meta = {}) => {
     const textToSend = content || inputVal.trim();
     if (!textToSend && type === 'text') return;
 
@@ -349,7 +380,8 @@ export default function App() {
       sender: user,
       text: textToSend,
       time: timeStr,
-      type
+      type,
+      ...meta
     };
 
     setMessages((prev) => [...prev, newMsg]);
@@ -421,17 +453,80 @@ export default function App() {
     }
   };
 
-  // Compressed Image Upload
-  const handleImageUpload = async (e) => {
+  // Image Selection Handler (opens Disappearing Timer Modal)
+  const handleImageSelect = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     try {
       const compressedBase64 = await compressImage(file, 1000, 0.72);
-      sendMessage('image', compressedBase64);
+      setPendingImage(compressedBase64);
+      setSelectedTimer(0);
     } catch (err) {
       alert('خطا در بارگذاری تصویر.');
     }
     e.target.value = '';
+  };
+
+  // Send Photo with selected timer
+  const confirmSendPhoto = () => {
+    if (!pendingImage) return;
+
+    if (selectedTimer === 0) {
+      // Permanent Photo
+      sendMessage('image', pendingImage);
+    } else {
+      // Disappearing Timed Photo
+      sendMessage('timed_image', pendingImage, {
+        timer: selectedTimer,
+        opened: false,
+        expired: false
+      });
+    }
+
+    setPendingImage(null);
+  };
+
+  // View Disappearing Photo with Live Countdown
+  const openTimedPhoto = (msg) => {
+    if (msg.expired) return;
+
+    setActiveViewingPhoto(msg);
+
+    const duration = msg.timer === 'once' ? 10 : Number(msg.timer);
+    setViewRemainingSeconds(duration);
+
+    if (viewCountdownRef.current) clearInterval(viewCountdownRef.current);
+
+    viewCountdownRef.current = setInterval(() => {
+      setViewRemainingSeconds((prev) => {
+        if (prev <= 1) {
+          clearInterval(viewCountdownRef.current);
+          expireTimedPhoto(msg.id);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const expireTimedPhoto = async (msgId) => {
+    setActiveViewingPhoto(null);
+    if (viewCountdownRef.current) clearInterval(viewCountdownRef.current);
+
+    // Update local state
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id === msgId) {
+          const updated = { ...m, expired: true, text: '' };
+          saveToStore('messages', updated);
+          return updated;
+        }
+        return m;
+      })
+    );
+
+    // Broadcast self-destruct signal to partner's phone
+    sendCloudDelete(msgId);
   };
 
   const handleBgUpload = async (e) => {
@@ -502,7 +597,6 @@ export default function App() {
     await saveToStore('memories', memItem);
     sendCloudMemory(memItem);
 
-    // Reset form
     setNewMemTitle('');
     setNewMemDesc('');
     setNewMemMedia(null);
@@ -514,7 +608,6 @@ export default function App() {
     if (!file) return;
 
     if (file.type.startsWith('video/')) {
-      // For video
       const reader = new FileReader();
       reader.onload = () => {
         setNewMemMedia(reader.result);
@@ -522,7 +615,6 @@ export default function App() {
       };
       reader.readAsDataURL(file);
     } else {
-      // For image
       try {
         const compressed = await compressImage(file, 1200, 0.75);
         setNewMemMedia(compressed);
@@ -531,7 +623,7 @@ export default function App() {
     }
   };
 
-  // Playlist Music Player Logic
+  // Playlist Logic
   const currentTrack = playlist[currentTrackIdx] || null;
 
   const toggleMusicPlay = () => {
@@ -663,7 +755,7 @@ export default function App() {
   }
 
   // ----------------------------------------------------
-  // MAIN APP SCREEN (WITH BOTTOM TABS)
+  // MAIN APP SCREEN
   // ----------------------------------------------------
   return (
     <div 
@@ -809,10 +901,12 @@ export default function App() {
                     <div key={m.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1`}>
                       <div className={`max-w-[82%] rounded-[22px] ${isMe ? 'rounded-tl-md glass-bubble-out text-white' : 'rounded-tr-md glass-bubble-in text-white/95'} p-3.5 shadow-md`}>
                         
+                        {/* Text Message */}
                         {m.type === 'text' && (
                           <p className="text-xs leading-relaxed font-normal">{m.text}</p>
                         )}
 
+                        {/* Permanent Image */}
                         {m.type === 'image' && (
                           <div className="rounded-xl overflow-hidden border border-white/20 mb-1">
                             <img 
@@ -825,6 +919,35 @@ export default function App() {
                           </div>
                         )}
 
+                        {/* Disappearing / Timed Image Message */}
+                        {m.type === 'timed_image' && (
+                          <div className="mb-1">
+                            {m.expired ? (
+                              <div className="px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white/40 text-[11px] flex items-center gap-1.5">
+                                <Flame className="w-3.5 h-3.5 text-rose-400/60" />
+                                <span>این عکس منقضی و حذف شد 🔥</span>
+                              </div>
+                            ) : (
+                              <div 
+                                onClick={() => openTimedPhoto(m)}
+                                className="relative rounded-2xl overflow-hidden border border-rose-500/30 bg-black/50 p-4 text-center cursor-pointer active:scale-95 transition-all group"
+                              >
+                                <div className="absolute inset-0 bg-cover bg-center filter blur-xl opacity-30 group-hover:opacity-40 transition-opacity" style={{ backgroundImage: `url(${m.text})` }} />
+                                <div className="relative z-10 flex flex-col items-center gap-2">
+                                  <div className="w-10 h-10 rounded-2xl bg-rose-500/20 border border-rose-500/40 text-rose-400 flex items-center justify-center text-lg animate-pulse">
+                                    <Flame className="w-5 h-5 fill-current" />
+                                  </div>
+                                  <div>
+                                    <p className="text-xs font-bold text-white">عکس محوشونده ({m.timer === 'once' ? 'یک‌بار مصرف' : `${m.timer} ثانیه`})</p>
+                                    <span className="text-[10px] text-pink-300">برای مشاهده لمس کنید ⏱️</span>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Voice Note */}
                         {m.type === 'audio' && (
                           <div className="flex items-center gap-3 w-56">
                             <button 
@@ -909,7 +1032,7 @@ export default function App() {
                   <input 
                     type="file" 
                     ref={fileInputRef} 
-                    onChange={handleImageUpload} 
+                    onChange={handleImageSelect} 
                     accept="image/*" 
                     className="hidden" 
                   />
@@ -917,7 +1040,7 @@ export default function App() {
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     className="p-2.5 rounded-2xl glass-panel text-white/70 hover:text-white active:scale-95 transition-all shadow-md shrink-0"
-                    title="ارسال عکس"
+                    title="ارسال عکس یا عکس تایم‌دار"
                   >
                     <ImageIcon className="w-4 h-4" />
                   </button>
@@ -957,12 +1080,10 @@ export default function App() {
         )}
 
         {/* ---------------------------------------------------- */}
-        {/* TAB 2: MEMORIES & MILESTONES (گاه‌شمار خاطرات) */}
+        {/* TAB 2: MEMORIES & MILESTONES */}
         {/* ---------------------------------------------------- */}
         {activeTab === 'memories' && (
           <div className="flex-1 flex flex-col overflow-hidden relative z-10">
-            
-            {/* Header */}
             <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
               <div>
                 <h2 className="text-sm font-bold text-white flex items-center gap-1.5">
@@ -981,7 +1102,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Memories List */}
             <div className="flex-1 px-4 py-3 overflow-y-auto space-y-4 lux-scroll">
               {memories.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-center p-6 text-white/40 space-y-3">
@@ -996,8 +1116,6 @@ export default function App() {
               ) : (
                 memories.map((mem) => (
                   <div key={mem.id} className="rounded-3xl glass-panel p-3.5 border border-white/10 shadow-xl space-y-2.5">
-                    
-                    {/* Media Preview (Photo or Video) */}
                     {mem.media && (
                       <div className="rounded-2xl overflow-hidden border border-white/15 bg-black/50 aspect-video relative flex items-center justify-center">
                         {mem.mediaType === 'video' ? (
@@ -1008,7 +1126,6 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* Details */}
                     <div>
                       <div className="flex items-center justify-between">
                         <h3 className="font-bold text-xs text-white">{mem.title}</h3>
@@ -1026,22 +1143,18 @@ export default function App() {
                         <span>❤️ یادگاری همیشگی</span>
                       </div>
                     </div>
-
                   </div>
                 ))
               )}
             </div>
-
           </div>
         )}
 
         {/* ---------------------------------------------------- */}
-        {/* TAB 3: COUPLE'S SHARED PLAYLIST (موزیک ما) */}
+        {/* TAB 3: COUPLE'S SHARED PLAYLIST */}
         {/* ---------------------------------------------------- */}
         {activeTab === 'playlist' && (
           <div className="flex-1 flex flex-col overflow-hidden relative z-10 p-4">
-            
-            {/* Header */}
             <div className="flex items-center justify-between pb-3 border-b border-white/10">
               <div>
                 <h2 className="text-sm font-bold text-white flex items-center gap-1.5">
@@ -1051,7 +1164,6 @@ export default function App() {
                 <p className="text-[10px] text-pink-200/60 mt-0.5">آهنگ‌هایی که با شنیدنشون یاد هم می‌افتیم</p>
               </div>
 
-              {/* Add Custom MP3 Song */}
               <input 
                 type="file" 
                 ref={songInputRef} 
@@ -1068,11 +1180,8 @@ export default function App() {
               </button>
             </div>
 
-            {/* Main Music Player Card */}
             {currentTrack && (
               <div className="my-4 p-5 rounded-3xl bg-gradient-to-b from-pink-950/40 via-purple-950/30 to-black/60 border border-pink-500/20 backdrop-blur-xl shadow-2xl flex flex-col items-center text-center">
-                
-                {/* Rotating Vinyl Record Artwork */}
                 <div className={`relative w-28 h-28 rounded-full border-4 border-pink-500/30 p-1 mb-4 shadow-[0_0_30px_rgba(244,63,94,0.3)] ${isPlayingMusic ? 'animate-spin [animation-duration:12s]' : ''}`}>
                   <div className="w-full h-full rounded-full bg-gradient-to-tr from-purple-900 via-rose-900 to-black flex items-center justify-center border-2 border-white/20">
                     <div className="w-8 h-8 rounded-full bg-rose-500 border-2 border-white/40 flex items-center justify-center text-xs">
@@ -1081,11 +1190,9 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Track Info */}
                 <h3 className="font-bold text-sm text-white drop-shadow-sm">{currentTrack.title}</h3>
                 <p className="text-[11px] text-pink-300/80 mt-0.5">{currentTrack.artist}</p>
 
-                {/* Audio Element */}
                 <audio 
                   ref={musicAudioRef}
                   src={currentTrack.src}
@@ -1098,7 +1205,6 @@ export default function App() {
                   onEnded={() => changeTrack(1)}
                 />
 
-                {/* Scrubber Progress Bar */}
                 <div className="w-full mt-4">
                   <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden cursor-pointer">
                     <div 
@@ -1112,7 +1218,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Controls Deck */}
                 <div className="flex items-center gap-6 mt-3">
                   <button 
                     onClick={() => changeTrack(-1)}
@@ -1139,11 +1244,9 @@ export default function App() {
                     <SkipForward className="w-5 h-5" />
                   </button>
                 </div>
-
               </div>
             )}
 
-            {/* Song List */}
             <div className="flex-1 overflow-y-auto space-y-1.5 lux-scroll">
               <span className="text-[10px] text-white/40 font-semibold block mb-1">لیست تمام آهنگ‌های ما ({playlist.length}):</span>
               {playlist.map((track, idx) => (
@@ -1176,7 +1279,6 @@ export default function App() {
                 </div>
               ))}
             </div>
-
           </div>
         )}
 
@@ -1184,7 +1286,6 @@ export default function App() {
         {/* BOTTOM NAVIGATION BAR */}
         {/* ---------------------------------------------------- */}
         <div className="relative z-30 bg-black/85 backdrop-blur-2xl border-t border-white/10 px-6 py-2.5 flex items-center justify-around shadow-2xl">
-          
           <button 
             onClick={() => setActiveTab('chat')}
             className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'chat' ? 'text-pink-400 font-bold scale-105' : 'text-white/40 hover:text-white/80'}`}
@@ -1208,14 +1309,111 @@ export default function App() {
             <Music className="w-5 h-5" />
             <span className="text-[10px]">موزیک ما</span>
           </button>
-
         </div>
+
+        {/* ---------------------------------------------------- */}
+        {/* MODAL: DISAPPEARING PHOTO TIMER PICKER */}
+        {/* ---------------------------------------------------- */}
+        {pendingImage && (
+          <div className="absolute inset-0 z-50 bg-black/85 backdrop-blur-md flex flex-col justify-end animate-fadeIn">
+            <div className="bg-[#140d21] border-t border-white/20 rounded-t-[36px] p-5 max-h-[85%] overflow-y-auto lux-scroll shadow-2xl">
+              <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  <Flame className="w-5 h-5 text-rose-400" />
+                  <h3 className="font-bold text-sm text-white">ارسال عکس (تعیین تایمر محوشدن)</h3>
+                </div>
+                <button 
+                  onClick={() => setPendingImage(null)}
+                  className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Photo Preview Thumbnail */}
+              <div className="my-3.5 rounded-2xl overflow-hidden border border-white/20 max-h-48 flex items-center justify-center bg-black/40">
+                <img src={pendingImage} alt="پیش‌نمایش" className="max-h-48 w-full object-contain" />
+              </div>
+
+              {/* Timer Options Grid */}
+              <div>
+                <label className="text-[11px] text-white/70 block mb-2">تایمر پاک شدن خودکار عکس:</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {TIMER_OPTIONS.map((opt) => (
+                    <button
+                      key={String(opt.value)}
+                      type="button"
+                      onClick={() => setSelectedTimer(opt.value)}
+                      className={`p-2.5 rounded-2xl border text-center transition-all ${selectedTimer === opt.value ? 'bg-gradient-to-r from-rose-500 to-pink-500 border-rose-400 text-white shadow-lg' : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/10'}`}
+                    >
+                      <span className="text-base block mb-0.5">{opt.icon}</span>
+                      <span className="text-[11px] font-bold block">{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="mt-5 flex gap-2">
+                <button 
+                  onClick={() => setPendingImage(null)}
+                  className="flex-1 py-3 rounded-2xl bg-white/10 hover:bg-white/20 text-white/70 text-xs font-semibold"
+                >
+                  انصراف
+                </button>
+                <button 
+                  onClick={confirmSendPhoto}
+                  className="flex-[2] py-3 rounded-2xl bg-gradient-to-r from-pink-500 to-purple-600 text-white font-bold text-xs shadow-lg active:scale-95 transition-all flex items-center justify-center gap-1.5"
+                >
+                  <Send className="w-4 h-4 rotate-180" />
+                  <span>{selectedTimer === 0 ? 'ارسال عادی عکس' : `ارسال با تایمر ${selectedTimer === 'once' ? 'یک‌بار مصرف' : `${selectedTimer} ثانیه`} 🔥`}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ---------------------------------------------------- */}
+        {/* FULLSCREEN VIEW: DISAPPEARING PHOTO WITH COUNTDOWN */}
+        {/* ---------------------------------------------------- */}
+        {activeViewingPhoto && (
+          <div className="absolute inset-0 z-50 bg-black flex flex-col justify-between p-4 animate-fadeIn">
+            {/* Top Bar with Countdown Badge */}
+            <div className="flex items-center justify-between pt-2">
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs font-bold shadow-lg animate-pulse">
+                <Flame className="w-4 h-4 fill-current" />
+                <span>زمان باقی‌مانده: {viewRemainingSeconds} ثانیه</span>
+              </div>
+
+              <button 
+                onClick={() => expireTimedPhoto(activeViewingPhoto.id)}
+                className="p-2 rounded-full bg-white/10 text-white hover:bg-white/20"
+                title="بستن و حذف فوری"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Photo Center */}
+            <div className="flex-1 flex items-center justify-center my-4 overflow-hidden">
+              <img 
+                src={activeViewingPhoto.text} 
+                alt="عکس محوشونده" 
+                className="max-h-full max-w-full object-contain rounded-2xl shadow-2xl"
+              />
+            </div>
+
+            {/* Bottom Warning */}
+            <div className="text-center pb-4 text-[11px] text-white/50">
+              <span>⚠️ این عکس با اتمام زمان یا بستن صفحه، برای همیشه می‌سوزد و پاک می‌شود.</span>
+            </div>
+          </div>
+        )}
 
         {/* Modal: Add New Memory */}
         {showAddMemory && (
           <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col justify-end animate-fadeIn">
             <div className="bg-[#140d21] border-t border-white/20 rounded-t-[36px] p-5 max-h-[90%] overflow-y-auto lux-scroll shadow-2xl">
-              
               <div className="flex items-center justify-between pb-3 border-b border-white/10">
                 <div className="flex items-center gap-2">
                   <BookHeart className="w-5 h-5 text-pink-400" />
@@ -1230,7 +1428,6 @@ export default function App() {
               </div>
 
               <form onSubmit={handleSaveMemory} className="mt-4 space-y-3.5 text-right">
-                
                 <div>
                   <label className="text-[11px] text-white/70 block mb-1">عنوان خاطره:</label>
                   <input 
@@ -1263,7 +1460,6 @@ export default function App() {
                   ></textarea>
                 </div>
 
-                {/* Media Picker */}
                 <div>
                   <label className="text-[11px] text-white/70 block mb-1">افزودن عکس یا فیلم یادگاری:</label>
                   <input 
@@ -1292,9 +1488,7 @@ export default function App() {
                 >
                   ثبت همیشگی این خاطره ❤️
                 </button>
-
               </form>
-
             </div>
           </div>
         )}
@@ -1320,7 +1514,6 @@ export default function App() {
         {showSettings && (
           <div className="absolute inset-0 z-50 bg-black/75 backdrop-blur-md flex flex-col justify-end animate-fadeIn">
             <div className="bg-[#140d21] border-t border-white/20 rounded-t-[36px] p-5 max-h-[85%] overflow-y-auto lux-scroll shadow-2xl">
-              
               <div className="flex items-center justify-between pb-3 border-b border-white/10">
                 <div className="flex items-center gap-2">
                   <Settings className="w-5 h-5 text-pink-400" />
@@ -1478,7 +1671,6 @@ export default function App() {
               >
                 بستن تنظیمات ✨
               </button>
-
             </div>
           </div>
         )}

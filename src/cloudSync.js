@@ -7,6 +7,7 @@ const TOPIC_STATUS = `${ROOM_CHANNEL}/status`;
 const TOPIC_TYPING = `${ROOM_CHANNEL}/typing`;
 const TOPIC_MEMORY = `${ROOM_CHANNEL}/memory`;
 const TOPIC_PLAYLIST = `${ROOM_CHANNEL}/playlist`;
+const TOPIC_DELETE = `${ROOM_CHANNEL}/delete`;
 
 const BROKERS = [
   'wss://broker.emqx.io:8084/mqtt',
@@ -17,7 +18,7 @@ let client = null;
 let currentBrokerIdx = 0;
 let isConnecting = false;
 
-export function initCloudSync({ onMessage, onNudge, onTyping, onMemory, onPlaylist, onStatusChange }) {
+export function initCloudSync({ onMessage, onNudge, onTyping, onMemory, onPlaylist, onDeleteMessage, onStatusChange }) {
   if (client && client.connected) {
     if (onStatusChange) onStatusChange(true);
     return client;
@@ -54,7 +55,8 @@ export function initCloudSync({ onMessage, onNudge, onTyping, onMemory, onPlayli
           TOPIC_STATUS, 
           TOPIC_TYPING,
           TOPIC_MEMORY,
-          TOPIC_PLAYLIST
+          TOPIC_PLAYLIST,
+          TOPIC_DELETE
         ], (err) => {
           if (err) console.error('Sub error:', err);
         });
@@ -73,6 +75,8 @@ export function initCloudSync({ onMessage, onNudge, onTyping, onMemory, onPlayli
             onMemory(data);
           } else if (topic === TOPIC_PLAYLIST && onPlaylist) {
             onPlaylist(data);
+          } else if (topic === TOPIC_DELETE && onDeleteMessage) {
+            onDeleteMessage(data);
           }
         } catch (e) {
           console.error('MQTT parse error:', e);
@@ -130,5 +134,11 @@ export function sendCloudMemory(memoryObj) {
 export function sendCloudPlaylist(trackObj) {
   if (client && client.connected) {
     client.publish(TOPIC_PLAYLIST, JSON.stringify(trackObj), { qos: 1 });
+  }
+}
+
+export function sendCloudDelete(messageId) {
+  if (client && client.connected) {
+    client.publish(TOPIC_DELETE, JSON.stringify({ id: messageId }), { qos: 1 });
   }
 }
