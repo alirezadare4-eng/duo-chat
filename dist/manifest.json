@@ -2,14 +2,14 @@
   "name": "چت اختصاصی علیرضا و فاطمه",
   "short_name": "چت دونفره",
   "description": "پیام‌رسان خصوصی و رمزشده علیرضا و فاطمه",
-  "start_url": "/",
+  "start_url": "./",
   "display": "standalone",
   "background_color": "#0d0915",
   "theme_color": "#0d0915",
   "orientation": "portrait",
   "icons": [
     {
-      "src": "/icon.svg",
+      "src": "./icon.svg",
       "sizes": "512x512",
       "type": "image/svg+xml",
       "purpose": "any maskable"

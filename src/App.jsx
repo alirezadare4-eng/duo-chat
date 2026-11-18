@@ -22,11 +22,18 @@ import {
 } from 'lucide-react';
 import { initCloudSync, sendCloudMessage, sendCloudNudge } from './cloudSync';
 
-const socket = io(window.location.origin, {
+const isLocal = typeof window !== 'undefined' && 
+  (window.location.hostname === 'localhost' || window.location.hostname.startsWith('192.168.'));
+
+const socket = isLocal ? io(window.location.origin, {
   autoConnect: true,
   reconnectionAttempts: 5,
   timeout: 3000,
-});
+}) : {
+  on: () => {},
+  off: () => {},
+  emit: () => {}
+};
 
 const THEMES = [
   { id: 'velvet', name: 'مخملی شب', bg: '#0d0915', a1: 'bg-pink-600/40', a2: 'bg-purple-700/35', a3: 'bg-indigo-600/30' },
