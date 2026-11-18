@@ -1,0 +1,97 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.font-vazir, .font-vazir * {
+  font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, sans-serif !important;
+}
+
+.font-rubik, .font-rubik * {
+  font-family: 'Rubik', sans-serif !important;
+}
+
+.font-markazi, .font-markazi * {
+  font-family: 'Markazi Text', serif !important;
+}
+
+.font-lalezar, .font-lalezar * {
+  font-family: 'Lalezar', cursive !important;
+}
+
+.font-system, .font-system * {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+input, textarea {
+  user-select: text;
+}
+
+.ambient-glow {
+  position: absolute;
+  width: 320px;
+  height: 320px;
+  border-radius: 50%;
+  filter: blur(85px);
+  opacity: 0.45;
+  pointer-events: none;
+  animation: floatAura 8s ease-in-out infinite alternate;
+}
+
+@keyframes floatAura {
+  0% { transform: translate(-20px, -20px) scale(0.9); }
+  100% { transform: translate(30px, 40px) scale(1.15); }
+}
+
+.glass-panel {
+  background: rgba(25, 20, 35, 0.65);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.glass-bubble-in {
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.glass-bubble-out {
+  background: linear-gradient(135deg, rgba(236, 72, 153, 0.85) 0%, rgba(168, 85, 247, 0.85) 100%);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 8px 25px rgba(219, 39, 119, 0.35);
+}
+
+.glass-input {
+  background: rgba(20, 16, 30, 0.7);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.lux-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+.lux-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+}
+
+@keyframes heartBeat {
+  0% { transform: scale(1); filter: drop-shadow(0 0 0px rgba(244, 63, 94, 0)); }
+  15% { transform: scale(1.25); filter: drop-shadow(0 0 12px rgba(244, 63, 94, 0.8)); }
+  30% { transform: scale(1); filter: drop-shadow(0 0 4px rgba(244, 63, 94, 0.4)); }
+  45% { transform: scale(1.18); filter: drop-shadow(0 0 10px rgba(244, 63, 94, 0.6)); }
+  60% { transform: scale(1); filter: drop-shadow(0 0 0px rgba(244, 63, 94, 0)); }
+}
+.heart-pulse {
+  animation: heartBeat 2.2s infinite ease-in-out;
+}
+
