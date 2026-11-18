@@ -52,6 +52,14 @@ const FONTS = [
   { id: 'font-system', name: 'فونت سیستم', preview: 'چت دونفره' }
 ];
 
+// Auto clear old cached test messages
+if (typeof window !== 'undefined' && localStorage.getItem('duo_clean_v3') !== '1') {
+  localStorage.removeItem('duo_messages');
+  localStorage.removeItem('duo_user');
+  localStorage.removeItem('duo_my_phone');
+  localStorage.setItem('duo_clean_v3', '1');
+}
+
 export default function App() {
   // Authentication by Phone Number
   const [myPhone, setMyPhone] = useState(() => localStorage.getItem('duo_my_phone') || '');
