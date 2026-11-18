@@ -5,6 +5,7 @@ const ROOM_CHANNEL = 'duo_chat_v1_room_alireza_fatemeh_sec9981';
 const TOPIC_MSG = `${ROOM_CHANNEL}/msg`;
 const TOPIC_NUDGE = `${ROOM_CHANNEL}/nudge`;
 const TOPIC_STATUS = `${ROOM_CHANNEL}/status`;
+const TOPIC_TYPING = `${ROOM_CHANNEL}/typing`;
 
 // Public 24/7 high-reliability WSS brokers (free, zero-account, 100% uptime)
 const BROKERS = [
@@ -14,7 +15,7 @@ const BROKERS = [
 
 let client = null;
 
-export function initCloudSync({ onMessage, onNudge, onStatusChange }) {
+export function initCloudSync({ onMessage, onNudge, onTyping, onStatusChange }) {
   if (client) return client;
 
   const brokerUrl = BROKERS[0];
@@ -33,7 +34,7 @@ export function initCloudSync({ onMessage, onNudge, onStatusChange }) {
       console.log('✨ Connected 24/7 to Global Cloud MQTT Broker');
       if (onStatusChange) onStatusChange(true);
 
-      client.subscribe([TOPIC_MSG, TOPIC_NUDGE, TOPIC_STATUS], (err) => {
+      client.subscribe([TOPIC_MSG, TOPIC_NUDGE, TOPIC_STATUS, TOPIC_TYPING], (err) => {
         if (err) console.error('Subscription error:', err);
       });
     });
@@ -45,6 +46,8 @@ export function initCloudSync({ onMessage, onNudge, onStatusChange }) {
           onMessage(data);
         } else if (topic === TOPIC_NUDGE && onNudge) {
           onNudge(data);
+        } else if (topic === TOPIC_TYPING && onTyping) {
+          onTyping(data);
         }
       } catch (e) {
         console.error('MQTT parse error:', e);
@@ -78,3 +81,8 @@ export function sendCloudNudge(sender) {
   }
 }
 
+export function sendCloudTyping(sender) {
+  if (client && client.connected) {
+    client.publish(TOPIC_TYPING, JSON.stringify({ sender }), { qos: 0 });
+  }
+}

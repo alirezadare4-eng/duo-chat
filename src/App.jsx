@@ -9,20 +9,19 @@ import {
   Palette, 
   Play, 
   ShieldCheck, 
-  BatteryCharging,
-  Settings,
-  X,
-  Type,
-  Upload,
-  RotateCcw,
-  Check,
-  Cloud,
-  Phone,
-  LogOut,
-  Lock,
-  Sparkles
+  Settings, 
+  X, 
+  Type, 
+  Upload, 
+  RotateCcw, 
+  Check, 
+  Cloud, 
+  Phone, 
+  LogOut, 
+  Calendar,
+  Smile
 } from 'lucide-react';
-import { initCloudSync, sendCloudMessage, sendCloudNudge } from './cloudSync';
+import { initCloudSync, sendCloudMessage, sendCloudNudge, sendCloudTyping } from './cloudSync';
 
 const isLocal = typeof window !== 'undefined' && 
   (window.location.hostname === 'localhost' || window.location.hostname.startsWith('192.168.'));
@@ -52,28 +51,24 @@ const FONTS = [
   { id: 'font-system', name: 'فونت سیستم', preview: 'چت دونفره' }
 ];
 
-// Auto clear old cached test messages
-if (typeof window !== 'undefined' && localStorage.getItem('duo_clean_v3') !== '1') {
-  localStorage.removeItem('duo_messages');
-  localStorage.removeItem('duo_user');
-  localStorage.removeItem('duo_my_phone');
-  localStorage.setItem('duo_clean_v3', '1');
-}
-
 export default function App() {
-  // Authentication by Phone Number
+  // Authentication
   const [myPhone, setMyPhone] = useState(() => localStorage.getItem('duo_my_phone') || '');
   const [user, setUser] = useState(() => localStorage.getItem('duo_user') || '');
-  
-  // Custom Phone Setup (Phone numbers of Alireza and Fatemeh)
-  const [alirezaPhone, setAlirezaPhone] = useState(() => localStorage.getItem('duo_phone_alireza') || '');
-  const [fatemehPhone, setFatemehPhone] = useState(() => localStorage.getItem('duo_phone_fatemeh') || '');
 
-  // UI state for login screen
+  // Relationship Start Date (Real days calculation)
+  const [startDate, setStartDate] = useState(() => localStorage.getItem('duo_start_date') || '');
+  
+  // Custom Bio/Status for each user
+  const [myBio, setMyBio] = useState(() => localStorage.getItem('duo_my_bio') || '');
+  const [partnerBio, setPartnerBio] = useState(() => localStorage.getItem('duo_partner_bio') || '');
+
+  // UI state for login
   const [loginInput, setLoginInput] = useState('');
   const [selectedRoleOnLogin, setSelectedRoleOnLogin] = useState('alireza');
   const [loginError, setLoginError] = useState('');
 
+  // Customization
   const [selectedFont, setSelectedFont] = useState(() => localStorage.getItem('duo_font') || 'font-vazir');
   const [themeIdx, setThemeIdx] = useState(() => Number(localStorage.getItem('duo_theme_idx')) || 0);
   const [customBg, setCustomBg] = useState(() => localStorage.getItem('duo_custom_bg') || null);
@@ -81,13 +76,16 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [cloudOnline, setCloudOnline] = useState(false);
 
-  // Messages: completely EMPTY by default (no pre-written fake messages!)
+  // Live Partner Typing Status (Realtime)
+  const [partnerIsTyping, setPartnerIsTyping] = useState(false);
+  const typingTimeoutRef = useRef(null);
+
+  // Clean empty messages
   const [messages, setMessages] = useState(() => {
     const saved = localStorage.getItem('duo_messages');
     if (saved) {
       try { 
         const parsed = JSON.parse(saved);
-        // Clean out any old mock messages
         return parsed.filter(m => m.id !== '1' && m.id !== '2');
       } catch (e) {}
     }
@@ -121,6 +119,7 @@ export default function App() {
     } catch (e) {}
   };
 
+  // Sync messages
   useEffect(() => {
     localStorage.setItem('duo_messages', JSON.stringify(messages));
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -153,6 +152,14 @@ export default function App() {
     localStorage.setItem('duo_bg_dim', bgDim);
   }, [bgDim]);
 
+  useEffect(() => {
+    if (startDate) {
+      localStorage.setItem('duo_start_date', startDate);
+    } else {
+      localStorage.removeItem('duo_start_date');
+    }
+  }, [startDate]);
+
   // Connect 24/7 Global Cloud Sync
   useEffect(() => {
     if (!user) return;
@@ -180,23 +187,44 @@ export default function App() {
           setTimeout(() => setShowHeartBurst(false), 1200);
           setTimeout(() => setNudgeAlert(null), 4000);
         }
+      },
+      onTyping: ({ sender }) => {
+        if (sender !== user) {
+          setPartnerIsTyping(true);
+          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+          typingTimeoutRef.current = setTimeout(() => {
+            setPartnerIsTyping(false);
+          }, 3000);
+        }
       }
     });
   }, [user]);
 
+  // Calculate REAL relationship days
+  const calculateRealDays = () => {
+    if (!startDate) return null;
+    try {
+      const start = new Date(startDate);
+      const now = new Date();
+      const diffTime = now.getTime() - start.getTime();
+      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+      return diffDays > 0 ? diffDays : 1;
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const realDays = calculateRealDays();
+
   const handleLogin = (e) => {
     e.preventDefault();
     const phone = loginInput.trim();
-    if (!phone) {
-      setLoginError('لطفاً شماره موبایل خود را وارد کنید.');
-      return;
-    }
-    if (phone.length < 10) {
-      setLoginError('شماره موبایل وارد شده معتبر نیست.');
+    if (!phone || phone.length < 10) {
+      setLoginError('لطفاً شماره موبایل معتبر خود را وارد کنید.');
       return;
     }
 
-    const currentRole = selectedRoleOnLogin; // 'alireza' or 'fatemeh'
+    const currentRole = selectedRoleOnLogin;
     localStorage.setItem('duo_my_phone', phone);
     localStorage.setItem('duo_user', currentRole);
     setMyPhone(phone);
@@ -216,9 +244,12 @@ export default function App() {
 
   const partnerName = user === 'alireza' ? 'فاطمه من' : 'علیرضای من';
   const partnerInitial = user === 'alireza' ? 'ف' : 'ع';
-  const partnerSubtitle = user === 'alireza' 
-    ? 'گوش میده به: شادمهر - بارون 🎵' 
-    : 'آنلاین • باتری گوشی: ۹۸٪ ⚡';
+
+  // Handle typing indicator
+  const handleInputChange = (e) => {
+    setInputVal(e.target.value);
+    sendCloudTyping(user);
+  };
 
   const sendMessage = (type = 'text', content = '') => {
     const textToSend = content || inputVal.trim();
@@ -311,7 +342,7 @@ export default function App() {
   const currentTheme = THEMES[themeIdx];
 
   // ----------------------------------------------------
-  // LOGIN SCREEN (اگر شماره هنوز وارد نشده باشد)
+  // LOGIN SCREEN
   // ----------------------------------------------------
   if (!myPhone || !user) {
     return (
@@ -330,25 +361,23 @@ export default function App() {
 
           <form onSubmit={handleLogin} className="w-full space-y-4">
             
-            {/* Role Selection Tabs */}
             <div className="bg-black/40 p-1.5 rounded-2xl border border-white/10 flex items-center gap-1">
               <button
                 type="button"
                 onClick={() => setSelectedRoleOnLogin('alireza')}
-                className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${selectedRoleOnLogin === 'alireza' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow' : 'text-white/60 hover:text-white'}`}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all ${selectedRoleOnLogin === 'alireza' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow' : 'text-white/60 hover:text-white'}`}
               >
                 من علیرضا هستم 👨‍💻
               </button>
               <button
                 type="button"
                 onClick={() => setSelectedRoleOnLogin('fatemeh')}
-                className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${selectedRoleOnLogin === 'fatemeh' ? 'bg-gradient-to-r from-rose-500 to-pink-500 text-white shadow' : 'text-white/60 hover:text-white'}`}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all ${selectedRoleOnLogin === 'fatemeh' ? 'bg-gradient-to-r from-rose-500 to-pink-500 text-white shadow' : 'text-white/60 hover:text-white'}`}
               >
                 من فاطمه هستم 🌸
               </button>
             </div>
 
-            {/* Phone Number Input */}
             <div className="relative text-right">
               <label className="text-[11px] text-white/70 block mb-1.5">شماره موبایل شما:</label>
               <div className="relative">
@@ -387,14 +416,15 @@ export default function App() {
   }
 
   // ----------------------------------------------------
-  // MAIN CHAT SCREEN
+  // MAIN REAL ANDROID CHAT SCREEN
   // ----------------------------------------------------
   return (
     <div 
-      className={`flex justify-center items-center w-full min-h-screen p-0 sm:p-4 select-none ${selectedFont}`}
+      className={`flex justify-center items-center w-full min-h-screen p-0 select-none ${selectedFont}`}
       style={{ backgroundColor: currentTheme.bg }}
     >
-      <div className="relative w-full sm:max-w-[420px] h-screen sm:h-[780px] bg-[#0d0915] sm:rounded-[44px] overflow-hidden flex flex-col shadow-2xl border sm:border-white/10">
+      {/* Full-bleed Mobile Container */}
+      <div className="relative w-full sm:max-w-[430px] h-screen bg-[#0d0915] sm:rounded-[36px] overflow-hidden flex flex-col shadow-2xl border-0 sm:border sm:border-white/10">
         
         {/* Custom Wallpaper Layer */}
         {customBg ? (
@@ -415,45 +445,46 @@ export default function App() {
           </>
         )}
 
-        {/* Top Header / Island */}
-        <div className="relative z-20 px-5 pt-3 pb-1 flex items-center justify-between text-[11px] text-white/70">
-          <span className="font-mono">13:30</span>
-          
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 border border-white/10 backdrop-blur-md">
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping"></span>
-            <span className="text-[10px] text-pink-300 font-bold">💍 ۳۴۲ روز باهم</span>
-          </div>
+        {/* Top Info Bar (Clean & Real) */}
+        <div className="relative z-20 px-4 pt-3 pb-1 flex items-center justify-between text-xs">
+          {/* Real Anniversary Days or Private badge */}
+          {realDays !== null ? (
+            <div 
+              onClick={() => setShowSettings(true)}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 border border-white/10 backdrop-blur-md cursor-pointer hover:bg-white/10 transition-colors"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping"></span>
+              <span className="text-[11px] text-pink-300 font-bold">💍 {realDays} روز باهم</span>
+            </div>
+          ) : (
+            <div 
+              onClick={() => setShowSettings(true)}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 border border-white/10 backdrop-blur-md cursor-pointer text-[10px] text-pink-200"
+            >
+              <Calendar className="w-3 h-3 text-pink-400" />
+              <span>تنظیم تاریخ سالگرد 💍</span>
+            </div>
+          )}
 
-          <div className="flex items-center gap-1">
-            <span className="text-emerald-400 font-bold">۹۸٪</span>
-            <BatteryCharging className="w-3.5 h-3.5 text-emerald-400" />
-          </div>
-        </div>
-
-        {/* 24/7 Cloud Status Bar */}
-        <div className="relative z-20 px-4 py-1.5 flex items-center justify-between text-xs">
-          <div className="flex items-center gap-1.5 text-[10px]">
-            <span className="flex items-center gap-1 text-emerald-400 font-medium">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>کلود ۲۴ ساعته فعال</span>
-            </span>
-          </div>
-
+          {/* User Account / Logout */}
           <div className="flex items-center gap-2">
-            <span className="text-[10px] text-white/70 font-medium">
-              {user === 'alireza' ? 'حساب: علیرضا' : 'حساب: فاطمه'}
+            <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span>کلود فعال</span>
             </span>
+            <span className="text-white/20">•</span>
             <button 
               onClick={handleLogout}
               title="خروج و تعویض شماره"
-              className="text-white/40 hover:text-rose-400 transition-colors p-1"
+              className="text-white/40 hover:text-rose-400 transition-colors flex items-center gap-1 text-[10px]"
             >
-              <LogOut className="w-3.5 h-3.5" />
+              <span>{user === 'alireza' ? 'علیرضا' : 'فاطمه'}</span>
+              <LogOut className="w-3 h-3" />
             </button>
           </div>
         </div>
 
-        {/* Chat Profile Header */}
+        {/* Real Profile Header */}
         <div className="relative z-20 px-4 py-2.5 mx-3 mt-1 rounded-2xl glass-panel flex items-center justify-between shadow-xl">
           <div className="flex items-center gap-3">
             <div className="relative cursor-pointer" onClick={() => setShowHeartBurst(true)}>
@@ -469,7 +500,23 @@ export default function App() {
                 <h1 className="font-bold text-sm tracking-tight text-white">{partnerName}</h1>
                 <Heart className="w-3.5 h-3.5 fill-rose-500 text-rose-500 heart-pulse" />
               </div>
-              <p className="text-[10px] text-pink-200/80 mt-0.5 font-light">{partnerSubtitle}</p>
+
+              {/* REAL Status: Live Typing or Online */}
+              {partnerIsTyping ? (
+                <div className="flex items-center gap-1.5 text-[10px] text-pink-300 font-medium mt-0.5 animate-pulse">
+                  <span>در حال نوشتن</span>
+                  <span className="flex gap-0.5">
+                    <span className="w-1 h-1 rounded-full bg-pink-400 animate-bounce"></span>
+                    <span className="w-1 h-1 rounded-full bg-pink-400 animate-bounce [animation-delay:0.2s]"></span>
+                    <span className="w-1 h-1 rounded-full bg-pink-400 animate-bounce [animation-delay:0.4s]"></span>
+                  </span>
+                </div>
+              ) : (
+                <p className="text-[10px] text-emerald-400/90 mt-0.5 font-light flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  <span>آنلاین • پیام‌رسانی امن</span>
+                </p>
+              )}
             </div>
           </div>
 
@@ -485,7 +532,7 @@ export default function App() {
             <button 
               onClick={() => setShowSettings(true)}
               className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 hover:text-white transition-all active:scale-95"
-              title="شخصی‌سازی فونت و پس‌زمینه"
+              title="تنظیمات، تاریخ سالگرد، فونت و پس‌زمینه"
             >
               <Settings className="w-4 h-4" />
             </button>
@@ -495,7 +542,6 @@ export default function App() {
         {/* Message Stream */}
         <div className="relative z-10 flex-1 px-4 py-3 overflow-y-auto space-y-3 lux-scroll flex flex-col">
           
-          {/* Empty State when no messages yet */}
           {messages.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-white/50 space-y-3">
               <div className="w-14 h-14 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-2xl animate-pulse">
@@ -573,7 +619,7 @@ export default function App() {
         )}
 
         {/* Input Bar */}
-        <div className="relative z-20 p-3 bg-black/50 backdrop-blur-2xl border-t border-white/10">
+        <div className="relative z-20 p-3 bg-black/60 backdrop-blur-2xl border-t border-white/10 pb-5 sm:pb-3">
           <form 
             onSubmit={(e) => {
               e.preventDefault();
@@ -610,7 +656,7 @@ export default function App() {
               <input 
                 type="text" 
                 value={inputVal}
-                onChange={(e) => setInputVal(e.target.value)}
+                onChange={handleInputChange}
                 placeholder={`پیامی برای ${partnerName}...`}
                 className="w-full glass-input rounded-2xl px-4 py-2.5 text-xs text-white placeholder-white/40 focus:outline-none focus:ring-1 focus:ring-pink-500/60 transition-all shadow-inner"
               />
@@ -634,8 +680,6 @@ export default function App() {
               </button>
             )}
           </form>
-
-          <div className="w-32 h-1 bg-white/20 rounded-full mx-auto mt-2.5"></div>
         </div>
 
         {/* Customization Settings Bottom Sheet */}
@@ -646,7 +690,7 @@ export default function App() {
               <div className="flex items-center justify-between pb-3 border-b border-white/10">
                 <div className="flex items-center gap-2">
                   <Settings className="w-5 h-5 text-pink-400" />
-                  <h3 className="font-bold text-sm text-white">تنظیمات و شخصی‌سازی</h3>
+                  <h3 className="font-bold text-sm text-white">تنظیمات چت دونفره</h3>
                 </div>
                 <button 
                   onClick={() => setShowSettings(false)}
@@ -654,6 +698,21 @@ export default function App() {
                 >
                   <X className="w-4 h-4" />
                 </button>
+              </div>
+
+              {/* Real Anniversary Date Setting */}
+              <div className="mt-4 p-3 rounded-2xl bg-white/5 border border-white/10">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-pink-300 mb-2">
+                  <Calendar className="w-4 h-4" />
+                  <span>تاریخ شروع باهم بودن (محاسبه واقعی روزها):</span>
+                </div>
+                <input 
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="w-full bg-black/40 border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-pink-500 font-mono"
+                />
+                <p className="text-[10px] text-white/40 mt-1">تعداد روزها از روی این تاریخ به طور خودکار محاسبه و در بالای صفحه نشان داده می‌شود.</p>
               </div>
 
               {/* Account / Phone Info */}
