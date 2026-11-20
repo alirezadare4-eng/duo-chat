@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">چت دونفره</string>
-    <string name="title_activity_main">چت دونفره</string>
+    <string name="app_name">two souls</string>
+    <string name="title_activity_main">two souls</string>
     <string name="package_name">com.alireza.duochat</string>
     <string name="custom_url_scheme">com.alireza.duochat</string>
 </resources>

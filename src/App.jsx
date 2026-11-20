@@ -249,7 +249,7 @@ export default function App() {
       await LocalNotifications.schedule({
         notifications: [
           {
-            title: title || 'چت دونفره',
+            title: title || 'two souls ❤️',
             body: body || '',
             id: Math.floor(Math.random() * 1000000),
             sound: 'beep.wav',
@@ -1046,8 +1046,8 @@ export default function App() {
             🔐
           </div>
 
-          <h2 className="text-lg font-bold text-white mb-1">ورود به چت اختصاصی</h2>
-          <p className="text-xs text-pink-200/80 mb-6">فضای کاملاً خصوصی و رمزشده دونفره</p>
+          <h2 className="text-xl font-extrabold text-white mb-1 tracking-wider">two souls ❤️</h2>
+          <p className="text-xs text-pink-200/80 mb-6">فضای کاملاً خصوصی و رمزشده علیرضا و فاطمه</p>
 
           <form onSubmit={handleLogin} className="w-full space-y-4">
             <div className="bg-black/40 p-1.5 rounded-2xl border border-white/10 flex items-center gap-1">
@@ -1955,7 +1955,7 @@ export default function App() {
               <div className="flex items-center justify-between pb-3 border-b border-white/10">
                 <div className="flex items-center gap-2">
                   <Settings className="w-5 h-5 text-pink-400" />
-                  <h3 className="font-bold text-sm text-white">تنظیمات چت دونفره</h3>
+                  <h3 className="font-bold text-sm text-white">تنظیمات two souls</h3>
                 </div>
                 <button 
                   onClick={() => setShowSettings(false)}
@@ -2110,7 +2110,7 @@ export default function App() {
                     }
 
                     try {
-                      await notifyUser('چت دونفره ❤️', 'سیستم اعلان‌ها و نوتیفیکیشن با موفقیت فعال شد!');
+                      await notifyUser('two souls ❤️', 'سیستم اعلان‌ها و نوتیفیکیشن با موفقیت فعال شد!');
                       setNudgeAlert('🔔 نوتیفیکیشن فعال شد!');
                       setTimeout(() => setNudgeAlert(null), 3000);
                     } catch (err) {
