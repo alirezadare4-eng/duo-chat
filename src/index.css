@@ -2,6 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: 'Arad';
+  src: url('/fonts/AradVF.woff2') format('woff2 supports variations'),
+       url('/fonts/AradVF.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+.font-arad, .font-arad * {
+  font-family: 'Arad', -apple-system, BlinkMacSystemFont, sans-serif !important;
+}
+
 .font-vazir, .font-vazir * {
   font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, sans-serif !important;
 }
@@ -23,9 +36,49 @@
 }
 
 * {
+  font-family: 'Arad', 'Vazirmatn', -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
   box-sizing: border-box;
+}
+
+/* Telegram message bubble tails */
+.bubble-out {
+  position: relative;
+  border-radius: 18px 18px 4px 18px;
+}
+.bubble-in {
+  position: relative;
+  border-radius: 18px 18px 18px 4px;
+}
+
+/* Telegram Animated Heart Reaction */
+@keyframes heartPop {
+  0% { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+  50% { transform: translate(-50%, -50%) scale(1.4); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1) translateY(-32px); opacity: 0; }
+}
+.heart-pop-anim {
+  animation: heartPop 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+/* Voice waveform pulse */
+@keyframes wavePulse {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+.wave-bar-anim {
+  animation: wavePulse 0.9s ease-in-out infinite;
+}
+
+/* Soft White & Blush Pink Wallpaper */
+.blush-white-bg {
+  background-color: #fdf8fa;
+  background-image: 
+    radial-gradient(circle at 50% 0%, rgba(244, 114, 182, 0.15) 0%, transparent 60%),
+    radial-gradient(circle at 100% 100%, rgba(251, 113, 133, 0.1) 0%, transparent 50%),
+    radial-gradient(rgba(244, 114, 182, 0.06) 1.2px, transparent 1.2px);
+  background-size: 100% 100%, 100% 100%, 26px 26px;
 }
 
 input, textarea {

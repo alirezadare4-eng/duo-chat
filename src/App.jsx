@@ -38,7 +38,12 @@ import {
   Camera,
   Smile,
   Edit3,
-  Sparkles
+  Sparkles,
+  CheckCheck,
+  HeartHandshake,
+  HelpCircle,
+  Gift,
+  ListChecks
 } from 'lucide-react';
 import { 
   initCloudSync, 
@@ -50,7 +55,8 @@ import {
   sendCloudDelete,
   sendCloudSeen,
   sendCloudPresence,
-  sendCloudProfile
+  sendCloudProfile,
+  sendCloudTogetherAction
 } from './cloudSync';
 import { compressImage, generateMessageId, formatSeconds } from './utils';
 import { getAllFromStore, saveToStore, deleteFromStore, clearStore } from './db';
@@ -62,6 +68,7 @@ const socket = isLocal ? io(window.location.origin, {
   autoConnect: true,
   reconnectionAttempts: 5,
   timeout: 3000,
+  transports: ['websocket']
 }) : {
   on: () => {},
   off: () => {},
@@ -69,13 +76,58 @@ const socket = isLocal ? io(window.location.origin, {
 };
 
 const THEMES = [
-  { id: 'velvet', name: 'مخملی شب', bg: '#0d0915', a1: 'bg-pink-600/40', a2: 'bg-purple-700/35', a3: 'bg-indigo-600/30' },
-  { id: 'emerald', name: 'زمردی تیره', bg: '#06130e', a1: 'bg-emerald-600/40', a2: 'bg-teal-700/35', a3: 'bg-cyan-600/30' },
-  { id: 'rose', name: 'رز ارغوانی', bg: '#170912', a1: 'bg-rose-600/40', a2: 'bg-pink-700/35', a3: 'bg-purple-600/30' },
-  { id: 'amoled', name: 'مشکی خالص', bg: '#000000', a1: 'bg-neutral-800/20', a2: 'bg-neutral-900/30', a3: 'bg-zinc-800/20' }
+  { 
+    id: 'blush-white', 
+    name: 'سفید و صورتی ملیح (پیش‌فرض)', 
+    bg: '#fdf8fa', 
+    isLight: true,
+    cardBg: 'bg-white/95 border-pink-100 shadow-sm text-slate-800',
+    bubbleIn: 'bg-white border border-pink-100/90 text-slate-800 shadow-sm',
+    bubbleOut: 'bg-gradient-to-l from-pink-400 via-rose-400 to-pink-500 text-white shadow-md shadow-pink-200/50',
+    a1: 'bg-pink-200/30', 
+    a2: 'bg-rose-100/40', 
+    a3: 'bg-pink-100/30' 
+  },
+  { 
+    id: 'velvet', 
+    name: 'مخملی شب', 
+    bg: '#0d0915', 
+    isLight: false,
+    cardBg: 'bg-[#120a1f]/90 border-white/10 text-white',
+    bubbleIn: 'bg-[#1c1428]/95 border-white/10 text-white/90',
+    bubbleOut: 'bg-gradient-to-l from-rose-600 via-pink-600 to-rose-700 text-white',
+    a1: 'bg-pink-600/40', 
+    a2: 'bg-purple-700/35', 
+    a3: 'bg-indigo-600/30' 
+  },
+  { 
+    id: 'rose', 
+    name: 'رز ارغوانی', 
+    bg: '#170912', 
+    isLight: false,
+    cardBg: 'bg-[#1e0d18]/90 border-white/10 text-white',
+    bubbleIn: 'bg-[#25101f]/95 border-white/10 text-white/90',
+    bubbleOut: 'bg-gradient-to-l from-rose-500 to-pink-600 text-white',
+    a1: 'bg-rose-600/40', 
+    a2: 'bg-pink-700/35', 
+    a3: 'bg-purple-600/30' 
+  },
+  { 
+    id: 'amoled', 
+    name: 'مشکی خالص', 
+    bg: '#000000', 
+    isLight: false,
+    cardBg: 'bg-[#0f0f0f]/90 border-white/10 text-white',
+    bubbleIn: 'bg-[#181818]/95 border-white/10 text-white/90',
+    bubbleOut: 'bg-gradient-to-l from-neutral-700 to-neutral-800 text-white',
+    a1: 'bg-neutral-800/20', 
+    a2: 'bg-neutral-900/30', 
+    a3: 'bg-zinc-800/20' 
+  }
 ];
 
 const FONTS = [
+  { id: 'font-arad', name: 'آراد (پیش‌فرض مدرن)', preview: 'عشق من و تو' },
   { id: 'font-vazir', name: 'وزیرمتن (مدرن)', preview: 'سلام عزیزم' },
   { id: 'font-rubik', name: 'روبیک (گرد و صمیمی)', preview: 'دوستت دارم' },
   { id: 'font-markazi', name: 'مرکزی (کلاسیک)', preview: 'خاطرات شیرین' },
@@ -108,7 +160,7 @@ export default function App() {
   const [loginError, setLoginError] = useState('');
 
   // Customization
-  const [selectedFont, setSelectedFont] = useState(() => localStorage.getItem('duo_font') || 'font-vazir');
+  const [selectedFont, setSelectedFont] = useState(() => localStorage.getItem('duo_font') || 'font-arad');
   const [themeIdx, setThemeIdx] = useState(() => Number(localStorage.getItem('duo_theme_idx')) || 0);
   const [customBg, setCustomBg] = useState(() => localStorage.getItem('duo_custom_bg') || null);
   const [bgDim, setBgDim] = useState(() => Number(localStorage.getItem('duo_bg_dim')) || 65);
@@ -311,6 +363,152 @@ export default function App() {
     } catch (err) {
       console.error('Avatar upload error:', err);
     }
+  };
+
+  // Together Features State
+  const [togetherSubTab, setTogetherSubTab] = useState('bond'); // 'bond', 'question', 'bucket', 'capsule'
+  const [myBondTouching, setMyBondTouching] = useState(false);
+  const [partnerBondTouching, setPartnerBondTouching] = useState(false);
+
+  // Daily Question
+  const DAILY_QUESTIONS = [
+    'اولین بار که صدام رو شنیدی چه حسی داشتی؟ 🎧❤️',
+    'قشنگ‌ترین لحظه‌ای که تا حالا با هم داشتیم چی بوده؟ ✨',
+    'اگر همین الان پیشت بودم، اولین کاری که می‌کردی چی بود؟ 🫂',
+    'چه چیزی توی اخلاق یا نگاه من بیشتر از همه دلت رو برد؟ 🌸',
+    'یک آرزوی دونفره که دوست داری امسال با هم بهش برسیم چیه؟ 💫'
+  ];
+  const currentDailyQuestion = DAILY_QUESTIONS[new Date().getDate() % DAILY_QUESTIONS.length];
+  const [myDailyAnswer, setMyDailyAnswer] = useState(() => localStorage.getItem('duo_daily_ans') || '');
+  const [partnerDailyAnswer, setPartnerDailyAnswer] = useState(() => localStorage.getItem('duo_partner_daily_ans') || '');
+  const [dailyInput, setDailyInput] = useState('');
+
+  // Bucket List
+  const [bucketList, setBucketList] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('duo_bucket_list')) || [
+        { id: 'b1', title: 'دیدن غروب آفتاب کنار دریا دست در دست هم 🌅', done: false, addedBy: 'علیرضا' },
+        { id: 'b2', title: 'سفر به یک کلبه جنگلی بارونی دونفره 🏡🌧️', done: false, addedBy: 'فاطمه' },
+        { id: 'b3', title: 'پختن کیک یا پیتزای دونفره توی خونه 🍕🎂', done: true, addedBy: 'علیرضا' },
+        { id: 'b4', title: 'شب‌بیداری و تماشای ستاره‌ها با یک ماگ چای داغ ☕✨', done: false, addedBy: 'فاطمه' }
+      ];
+    } catch(e) {
+      return [];
+    }
+  });
+  const [newBucketTitle, setNewBucketTitle] = useState('');
+
+  // Time Capsules
+  const [capsules, setCapsules] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('duo_capsules')) || [
+        { 
+          id: 'cap1', 
+          sender: 'alireza', 
+          title: 'نامه‌ای برای سالگرد قشنگمون 💌', 
+          content: 'عشق من، این نامه رو زمانی می‌خونی که یک سال دیگه از با هم بودنمون گذشت و هر ثانیه‌اش برام بهشت بوده...', 
+          unlockDate: '2027-03-20',
+          createdAt: Date.now()
+        }
+      ];
+    } catch(e) {
+      return [];
+    }
+  });
+  const [showAddCapsule, setShowAddCapsule] = useState(false);
+  const [newCapTitle, setNewCapTitle] = useState('');
+  const [newCapContent, setNewCapContent] = useState('');
+  const [newCapUnlockDate, setNewCapUnlockDate] = useState('');
+
+  const handleBondTouchStart = () => {
+    setMyBondTouching(true);
+    sendCloudTogetherAction({ type: 'touch', sender: user, touching: true });
+    if ('vibrate' in navigator) navigator.vibrate([80, 40, 80]);
+  };
+
+  const handleBondTouchEnd = () => {
+    setMyBondTouching(false);
+    sendCloudTogetherAction({ type: 'touch', sender: user, touching: false });
+  };
+
+  const handleSaveDailyAnswer = (e) => {
+    e.preventDefault();
+    const ans = dailyInput.trim();
+    if (!ans) return;
+    setMyDailyAnswer(ans);
+    localStorage.setItem('duo_daily_ans', ans);
+    sendCloudTogetherAction({ type: 'daily_answer', sender: user, answer: ans });
+    setDailyInput('');
+    setNudgeAlert('پاسخ شما با موفقیت ثبت شد! ✨❤️');
+    setTimeout(() => setNudgeAlert(null), 3500);
+  };
+
+  const handleAddBucketItem = (e) => {
+    e.preventDefault();
+    const title = newBucketTitle.trim();
+    if (!title) return;
+    const item = {
+      id: 'b_' + Date.now(),
+      title,
+      done: false,
+      addedBy: user === 'alireza' ? 'علیرضا' : 'فاطمه'
+    };
+    const updated = [item, ...bucketList];
+    setBucketList(updated);
+    localStorage.setItem('duo_bucket_list', JSON.stringify(updated));
+    sendCloudTogetherAction({ type: 'bucket_add', item });
+    setNewBucketTitle('');
+  };
+
+  const handleToggleBucket = (id, currentDone) => {
+    const updated = bucketList.map(b => b.id === id ? { ...b, done: !currentDone } : b);
+    setBucketList(updated);
+    localStorage.setItem('duo_bucket_list', JSON.stringify(updated));
+    sendCloudTogetherAction({ type: 'bucket_toggle', id, done: !currentDone });
+    if ('vibrate' in navigator) navigator.vibrate(50);
+  };
+
+  const handleAddCapsule = (e) => {
+    e.preventDefault();
+    if (!newCapTitle.trim() || !newCapContent.trim() || !newCapUnlockDate) return;
+    const capsule = {
+      id: 'cap_' + Date.now(),
+      sender: user,
+      title: newCapTitle.trim(),
+      content: newCapContent.trim(),
+      unlockDate: newCapUnlockDate,
+      createdAt: Date.now()
+    };
+    const updated = [capsule, ...capsules];
+    setCapsules(updated);
+    localStorage.setItem('duo_capsules', JSON.stringify(updated));
+    sendCloudTogetherAction({ type: 'capsule_add', capsule });
+    setShowAddCapsule(false);
+    setNewCapTitle('');
+    setNewCapContent('');
+    setNewCapUnlockDate('');
+    setNudgeAlert('کپسول زمان ایجاد و مهروموم شد! 🔒💌');
+    setTimeout(() => setNudgeAlert(null), 3500);
+  };
+
+  const handleDoubleTapMessage = (msgId) => {
+    setShowHeartBurst(true);
+    setTimeout(() => setShowHeartBurst(false), 900);
+    if ('vibrate' in navigator) navigator.vibrate(60);
+
+    setMessages((prev) => 
+      prev.map((m) => {
+        if (m.id === msgId) {
+          const reacts = m.reactions || {};
+          const count = (reacts['❤️'] || 0) + 1;
+          const updated = { ...m, reactions: { ...reacts, ['❤️']: count } };
+          saveToStore('messages', updated);
+          return updated;
+        }
+        return m;
+      })
+    );
+    sendCloudTogetherAction({ type: 'reaction', msgId, emoji: '❤️', sender: user });
   };
 
   const playChime = () => {
@@ -645,6 +843,65 @@ export default function App() {
             setMyProfile(data);
             localStorage.setItem('two_souls_my_profile', JSON.stringify(data));
           }
+        }
+      },
+      onTogetherAction: (action) => {
+        if (!action || !action.type) return;
+        if (action.type === 'touch') {
+          if (action.sender !== user) {
+            setPartnerBondTouching(action.touching);
+            if (action.touching) {
+              playChime();
+              if ('vibrate' in navigator) navigator.vibrate([100, 50, 100, 50, 300]);
+            }
+          }
+        } else if (action.type === 'reaction') {
+          setMessages((prev) => 
+            prev.map((m) => {
+              if (m.id === action.msgId) {
+                const reacts = m.reactions || {};
+                const count = (reacts[action.emoji] || 0) + 1;
+                const updated = { ...m, reactions: { ...reacts, [action.emoji]: count } };
+                saveToStore('messages', updated);
+                return updated;
+              }
+              return m;
+            })
+          );
+        } else if (action.type === 'daily_answer') {
+          if (action.sender !== user) {
+            setPartnerDailyAnswer(action.answer);
+            localStorage.setItem('duo_partner_daily_ans', action.answer);
+            playChime();
+            setNudgeAlert(`عشقت به سوال روز دونفره پاسخ داد! 💌`);
+            setTimeout(() => setNudgeAlert(null), 3500);
+          }
+        } else if (action.type === 'bucket_add') {
+          setBucketList((prev) => {
+            if (prev.some(b => b.id === action.item.id)) return prev;
+            const updated = [action.item, ...prev];
+            localStorage.setItem('duo_bucket_list', JSON.stringify(updated));
+            return updated;
+          });
+          playChime();
+          setNudgeAlert(`یک آرزوی جدید به لیست دونفره اضافه شد! 💫`);
+          setTimeout(() => setNudgeAlert(null), 3500);
+        } else if (action.type === 'bucket_toggle') {
+          setBucketList((prev) => {
+            const updated = prev.map(b => b.id === action.id ? { ...b, done: action.done } : b);
+            localStorage.setItem('duo_bucket_list', JSON.stringify(updated));
+            return updated;
+          });
+        } else if (action.type === 'capsule_add') {
+          setCapsules((prev) => {
+            if (prev.some(c => c.id === action.capsule.id)) return prev;
+            const updated = [action.capsule, ...prev];
+            localStorage.setItem('duo_capsules', JSON.stringify(updated));
+            return updated;
+          });
+          playChime();
+          setNudgeAlert(`یک کپسول زمان جدید با تاریخ قفل ایجاد شد! ⏳🔒`);
+          setTimeout(() => setNudgeAlert(null), 3500);
         }
       }
     });
@@ -1164,37 +1421,37 @@ export default function App() {
   if (!myPhone || !user) {
     return (
       <div 
-        className={`flex justify-center items-center w-full min-h-[100dvh] p-4 select-none ${selectedFont}`}
+        className={`flex justify-center items-center w-full min-h-[100dvh] p-4 select-none ${selectedFont} ${currentTheme.isLight ? 'blush-white-bg' : ''}`}
         style={{ backgroundColor: currentTheme.bg }}
       >
-        <div className="relative w-full max-w-[390px] rounded-[36px] bg-[#120a1f]/90 border border-white/15 p-6 backdrop-blur-2xl shadow-2xl flex flex-col items-center text-center">
-          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-pink-500 via-rose-500 to-purple-600 flex items-center justify-center text-3xl shadow-xl border border-white/20 mb-4 animate-bounce">
+        <div className={`relative w-full max-w-[390px] rounded-[36px] ${currentTheme.isLight ? 'bg-white/95 border border-pink-200 text-slate-800 shadow-xl' : 'bg-[#120a1f]/90 border border-white/15 text-white'} p-6 backdrop-blur-2xl flex flex-col items-center text-center`}>
+          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-pink-400 via-rose-400 to-pink-500 flex items-center justify-center text-3xl shadow-xl border border-white/20 mb-4 animate-bounce">
             🔐
           </div>
 
-          <h2 className="text-xl font-extrabold text-white mb-1 tracking-wider">two souls ❤️</h2>
-          <p className="text-xs text-pink-200/80 mb-6">فضای کاملاً خصوصی و رمزشده علیرضا و فاطمه</p>
+          <h2 className={`text-xl font-extrabold ${currentTheme.isLight ? 'text-slate-900' : 'text-white'} mb-1 tracking-wider`}>two souls ❤️</h2>
+          <p className={`text-xs ${currentTheme.isLight ? 'text-pink-500 font-medium' : 'text-pink-200/80'} mb-6`}>فضای کاملاً خصوصی و رمزشده علیرضا و فاطمه</p>
 
           <form onSubmit={handleLogin} className="w-full space-y-4">
-            <div className="bg-black/40 p-1.5 rounded-2xl border border-white/10 flex items-center gap-1">
+            <div className={`${currentTheme.isLight ? 'bg-pink-50 border border-pink-100' : 'bg-black/40 border border-white/10'} p-1.5 rounded-2xl flex items-center gap-1`}>
               <button
                 type="button"
                 onClick={() => setSelectedRoleOnLogin('alireza')}
-                className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all ${selectedRoleOnLogin === 'alireza' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow' : 'text-white/60 hover:text-white'}`}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all ${selectedRoleOnLogin === 'alireza' ? 'bg-gradient-to-r from-pink-400 to-rose-500 text-white shadow' : currentTheme.isLight ? 'text-slate-600' : 'text-white/60 hover:text-white'}`}
               >
                 من علیرضا هستم 👨‍💻
               </button>
               <button
                 type="button"
                 onClick={() => setSelectedRoleOnLogin('fatemeh')}
-                className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all ${selectedRoleOnLogin === 'fatemeh' ? 'bg-gradient-to-r from-rose-500 to-pink-500 text-white shadow' : 'text-white/60 hover:text-white'}`}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all ${selectedRoleOnLogin === 'fatemeh' ? 'bg-gradient-to-r from-rose-500 to-pink-500 text-white shadow' : currentTheme.isLight ? 'text-slate-600' : 'text-white/60 hover:text-white'}`}
               >
                 من فاطمه هستم 🌸
               </button>
             </div>
 
             <div className="relative text-right">
-              <label className="text-[11px] text-white/70 block mb-1.5">شماره موبایل شما:</label>
+              <label className={`text-[11px] ${currentTheme.isLight ? 'text-slate-600' : 'text-white/70'} block mb-1.5`}>شماره موبایل شما:</label>
               <div className="relative">
                 <input 
                   type="tel"
@@ -1202,19 +1459,19 @@ export default function App() {
                   placeholder="09..."
                   value={loginInput}
                   onChange={(e) => setLoginInput(e.target.value)}
-                  className="w-full bg-black/40 border border-white/15 rounded-2xl px-4 py-3 text-sm text-center font-mono text-white placeholder-white/30 focus:outline-none focus:border-pink-500 transition-all"
+                  className={`w-full ${currentTheme.isLight ? 'bg-slate-50 border border-pink-200 text-slate-800 placeholder-slate-400 focus:border-pink-500' : 'bg-black/40 border border-white/15 text-white placeholder-white/30 focus:border-pink-500'} rounded-2xl px-4 py-3 text-sm text-center font-mono transition-all`}
                 />
-                <Phone className="w-4 h-4 text-white/40 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <Phone className={`w-4 h-4 ${currentTheme.isLight ? 'text-slate-400' : 'text-white/40'} absolute left-3.5 top-1/2 -translate-y-1/2`} />
               </div>
             </div>
 
             {loginError && (
-              <p className="text-[11px] text-rose-400 font-medium">{loginError}</p>
+              <p className="text-[11px] text-rose-500 font-medium">{loginError}</p>
             )}
 
             <button 
               type="submit"
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-pink-500 via-rose-500 to-purple-600 text-white font-bold text-xs shadow-lg active:scale-95 transition-all mt-2"
+              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-pink-400 via-rose-400 to-pink-500 text-white font-bold text-xs shadow-lg active:scale-95 transition-all mt-2"
             >
               ورود به فضای گفتگو ✨
             </button>
@@ -1415,6 +1672,7 @@ export default function App() {
                       className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1 transition-all duration-300 ${highlightedMsgId === m.id ? 'scale-102 ring-2 ring-rose-400 rounded-3xl p-1 bg-rose-500/15' : ''}`}
                     >
                       <div 
+                        onDoubleClick={() => handleDoubleTapMessage(m.id)}
                         onTouchStart={() => handleMessageTouchStart(m)}
                         onTouchEnd={handleMessageTouchEnd}
                         onTouchMove={handleMessageTouchMove}
@@ -1423,19 +1681,27 @@ export default function App() {
                           setSelectedMsgForMenu(m);
                           setShowDeleteConfirm(false);
                         }}
-                        className={`max-w-[84%] rounded-[22px] ${isMe ? 'rounded-tl-md glass-bubble-out text-white' : 'rounded-tr-md glass-bubble-in text-white/95'} p-3.5 shadow-md group relative select-text`}
+                        className={`max-w-[85%] ${
+                          isMe 
+                            ? (currentTheme.isLight 
+                                ? 'bubble-out bg-gradient-to-l from-pink-400 via-rose-400 to-pink-500 text-white shadow-md shadow-pink-200/50' 
+                                : 'bubble-out glass-bubble-out text-white')
+                            : (currentTheme.isLight 
+                                ? 'bubble-in bg-white border border-pink-100 text-slate-800 shadow-sm' 
+                                : 'bubble-in glass-bubble-in text-white/95')
+                        } p-3.5 shadow-md group relative select-text transition-transform active:scale-[0.99]`}
                       >
                         {/* Quoted Replying Header */}
                         {m.replyTo && (
                           <div 
                             onClick={() => scrollToMessage(m.replyTo.id)}
-                            className="mb-2 p-2 rounded-xl bg-black/30 border-r-2 border-rose-400/90 cursor-pointer text-right hover:bg-black/45 transition-colors"
+                            className={`mb-2 p-2 rounded-xl ${currentTheme.isLight ? 'bg-pink-50/70 border-r-2 border-pink-400 text-slate-700' : 'bg-black/30 border-r-2 border-rose-400/90 text-white/80'} cursor-pointer text-right transition-colors`}
                           >
-                            <div className="flex items-center gap-1 text-[10px] text-rose-300 font-medium">
+                            <div className="flex items-center gap-1 text-[10px] text-pink-500 font-medium">
                               <Reply className="w-3 h-3 inline-block rotate-180" />
                               <span>{m.replyTo.sender === user ? 'شما' : partnerName}</span>
                             </div>
-                            <p className="text-[11px] text-white/70 truncate mt-0.5 select-none font-normal">
+                            <p className="text-[11px] truncate mt-0.5 select-none font-normal">
                               {m.replyTo.text}
                             </p>
                           </div>
@@ -1487,12 +1753,12 @@ export default function App() {
                           </div>
                         )}
 
-                        {/* Voice Note */}
+                        {/* Voice Note with Waveform */}
                         {m.type === 'audio' && (
-                          <div className="flex items-center gap-3 w-56">
+                          <div className="flex items-center gap-2.5 w-60">
                             <button 
                               onClick={() => toggleAudio(m.id, m.text)}
-                              className="w-9 h-9 rounded-xl bg-white/20 hover:bg-white/30 flex items-center justify-center text-white active:scale-95 transition-all shadow-sm shrink-0"
+                              className={`w-9 h-9 rounded-full ${isMe ? 'bg-white/25 hover:bg-white/35 text-white' : currentTheme.isLight ? 'bg-pink-500 text-white shadow-sm' : 'bg-white/20 text-white'} flex items-center justify-center active:scale-95 transition-all shrink-0`}
                             >
                               {isAudioPlaying ? (
                                 <Pause className="w-4 h-4 fill-current" />
@@ -1500,22 +1766,40 @@ export default function App() {
                                 <Play className="w-4 h-4 ml-0.5 fill-current" />
                               )}
                             </button>
-                            <div className="flex-1">
-                              <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
-                                <div 
-                                  className={`h-full bg-white rounded-full transition-all ${isAudioPlaying ? 'opacity-100' : 'opacity-60'}`}
-                                  style={{ width: isAudioPlaying ? `${audioProgress}%` : '40%' }}
-                                />
+                            <div className="flex-1 flex flex-col justify-center">
+                              <div className="flex items-center gap-1 h-5">
+                                {[4, 7, 3, 6, 8, 5, 7, 4, 6, 3, 5, 2].map((h, i) => (
+                                  <span 
+                                    key={i} 
+                                    style={{ height: `${h * 2.2}px` }} 
+                                    className={`w-1 rounded-full transition-all ${isAudioPlaying ? (isMe ? 'bg-white wave-bar-anim' : 'bg-pink-500 wave-bar-anim') : (isMe ? 'bg-white/50' : currentTheme.isLight ? 'bg-slate-300' : 'bg-white/30')}`}
+                                  />
+                                ))}
                               </div>
-                              <span className="text-[9px] text-white/70 mt-1 block">
-                                {isAudioPlaying ? 'در حال پخش...' : 'پیام صوتی اختصاصی'}
+                              <span className={`text-[9px] ${isMe ? (currentTheme.isLight ? 'text-pink-100' : 'text-white/80') : (currentTheme.isLight ? 'text-slate-400' : 'text-white/60')} font-mono mt-0.5`}>
+                                {isAudioPlaying ? 'در حال پخش...' : 'پیام صوتی دونفره'}
                               </span>
                             </div>
                           </div>
                         )}
 
+                        {/* Reaction Badges */}
+                        {m.reactions && Object.keys(m.reactions).length > 0 && (
+                          <div className={`flex items-center gap-1 mt-1 -mb-1 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                            {Object.entries(m.reactions).map(([emoji, count]) => (
+                              <span 
+                                key={emoji} 
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-pink-500/15 border border-pink-400/30 text-[10px] text-pink-500 font-bold shadow-sm"
+                              >
+                                <span>{emoji}</span>
+                                {count > 1 && <span className="text-[9px] font-mono">{count}</span>}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
                         {/* Meta info & Action trigger */}
-                        <div className={`flex items-center justify-between gap-2 mt-1 text-[9px] ${isMe ? 'text-white/80' : 'text-white/40'} font-mono`}>
+                        <div className={`flex items-center justify-between gap-2 mt-1 text-[9px] ${isMe ? (currentTheme.isLight ? 'text-pink-100' : 'text-white/80') : (currentTheme.isLight ? 'text-slate-400' : 'text-white/40')} font-mono`}>
                           <button
                             type="button"
                             onClick={(e) => {
@@ -1523,7 +1807,7 @@ export default function App() {
                               setSelectedMsgForMenu(m);
                               setShowDeleteConfirm(false);
                             }}
-                            className="opacity-40 hover:opacity-100 p-0.5 text-white/60 hover:text-white transition-opacity active:scale-90"
+                            className={`opacity-50 hover:opacity-100 p-0.5 ${isMe ? 'text-white' : currentTheme.isLight ? 'text-slate-500' : 'text-white/60'} transition-opacity active:scale-90`}
                             title="گزینه‌ها (ریپلای و حذف)"
                           >
                             <MoreHorizontal className="w-3.5 h-3.5" />
@@ -1532,9 +1816,9 @@ export default function App() {
                             <span>{m.time}</span>
                             {isMe && (
                               m.seen ? (
-                                <span className="text-sky-300 font-bold text-[10px] tracking-tighter" title="خوانده شده">✓✓</span>
+                                <CheckCheck className="w-3.5 h-3.5 text-white" />
                               ) : (
-                                <span className="text-white/40 text-[10px]" title="ارسال شده (هنوز خوانده نشده)">✓</span>
+                                <Check className="w-3.5 h-3.5 text-pink-100" />
                               )
                             )}
                           </div>
@@ -1548,7 +1832,7 @@ export default function App() {
             </div>
 
             {/* Input & Voice Deck */}
-            <div className="p-3 bg-black/70 backdrop-blur-2xl border-t border-white/10">
+            <div className={`p-3 ${currentTheme.isLight ? 'bg-white/95 border-pink-100/90 shadow-lg' : 'bg-black/70 border-white/10'} backdrop-blur-2xl border-t`}>
               {/* Reply Preview Bar */}
               {replyingTo && (
                 <div className="flex items-center justify-between px-3 py-2 bg-white/10 backdrop-blur-md rounded-2xl border-r-4 border-rose-400 mb-2 text-xs text-white/90 animate-fadeIn">
@@ -1617,7 +1901,7 @@ export default function App() {
                   <button 
                     type="button" 
                     onClick={() => sendMessage('text', '🫀❤️ دلتنگتم بی‌نهایت...')}
-                    className="p-2.5 rounded-2xl glass-panel text-rose-400 hover:text-rose-300 active:scale-95 transition-all shadow-md shrink-0"
+                    className={`p-2.5 rounded-2xl ${currentTheme.isLight ? 'bg-pink-50 hover:bg-pink-100 text-pink-500 border border-pink-100' : 'glass-panel text-rose-400 hover:text-rose-300'} active:scale-95 transition-all shadow-sm shrink-0`}
                     title="ارسال قلب"
                   >
                     ❤️
@@ -1633,8 +1917,8 @@ export default function App() {
                   <button 
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="p-2.5 rounded-2xl glass-panel text-white/70 hover:text-white active:scale-95 transition-all shadow-md shrink-0"
-                    title="ارسال عکس یا عکس تایم‌دار"
+                    className={`p-2.5 rounded-2xl ${currentTheme.isLight ? 'bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200' : 'glass-panel text-white/70 hover:text-white'} active:scale-95 transition-all shadow-sm shrink-0`}
+                    title="ارسال عکس"
                   >
                     <ImageIcon className="w-4 h-4" />
                   </button>
@@ -1646,14 +1930,14 @@ export default function App() {
                       value={inputVal}
                       onChange={handleInputChange}
                       placeholder={replyingTo ? `پاسخ به ${replyingTo.sender === user ? 'پیام خودت' : partnerName}...` : `پیامی برای ${partnerName}...`}
-                      className="w-full glass-input rounded-2xl px-4 py-2.5 text-xs text-white placeholder-white/40 focus:outline-none focus:ring-1 focus:ring-pink-500/60 transition-all shadow-inner"
+                      className={`w-full ${currentTheme.isLight ? 'bg-slate-50 border border-pink-200/80 text-slate-800 placeholder-slate-400 focus:ring-pink-300' : 'glass-input text-white placeholder-white/40 focus:ring-pink-500/60'} rounded-2xl px-4 py-2.5 text-xs focus:outline-none focus:ring-1 transition-all shadow-inner`}
                     />
                   </div>
 
                   {inputVal.trim() ? (
                     <button 
                       type="submit" 
-                      className="p-2.5 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 text-white active:scale-95 transition-all shadow-lg flex items-center justify-center shrink-0"
+                      className="p-2.5 rounded-2xl bg-gradient-to-tr from-pink-400 to-rose-500 text-white active:scale-95 transition-all shadow-lg flex items-center justify-center shrink-0"
                     >
                       <Send className="w-4 h-4 rotate-180" />
                     </button>
@@ -1661,7 +1945,7 @@ export default function App() {
                     <button 
                       type="button"
                       onClick={startRecording}
-                      className="p-2.5 rounded-2xl glass-panel text-white/80 active:scale-95 transition-all shadow-lg flex items-center justify-center shrink-0"
+                      className={`p-2.5 rounded-2xl ${currentTheme.isLight ? 'bg-pink-50 hover:bg-pink-100 text-pink-500 border border-pink-200' : 'glass-panel text-white/80'} active:scale-95 transition-all shadow-lg flex items-center justify-center shrink-0`}
                       title="ضبط وویس"
                     >
                       <Mic className="w-4 h-4" />
@@ -1675,7 +1959,293 @@ export default function App() {
         )}
 
         {/* ---------------------------------------------------- */}
-        {/* TAB 2: MEMORIES & MILESTONES */}
+        {/* TAB 2: TOGETHER (با هم - لمس همزمان، سوال روز، آرزوها، کپسول) */}
+        {/* ---------------------------------------------------- */}
+        {activeTab === 'together' && (
+          <div className="flex-1 flex flex-col overflow-y-auto lux-scroll relative z-10 p-4">
+            
+            {/* Header & Sub-tab Pill Switcher */}
+            <div className="flex items-center justify-between pb-3 border-b border-pink-100/50 mb-4">
+              <div>
+                <h2 className={`text-sm font-bold ${currentTheme.isLight ? 'text-slate-900' : 'text-white'} flex items-center gap-1.5`}>
+                  <HeartHandshake className="w-4 h-4 text-pink-500" />
+                  <span>فضای پیوند دونفره</span>
+                </h2>
+                <p className={`text-[10px] ${currentTheme.isLight ? 'text-slate-500' : 'text-pink-200/60'} mt-0.5`}>
+                  لحظات پیوند همزمان، سوال روز، آرزوها و کپسول زمان
+                </p>
+              </div>
+            </div>
+
+            {/* Sub-tab navigation */}
+            <div className={`flex p-1 rounded-2xl ${currentTheme.isLight ? 'bg-pink-50/90 border border-pink-100' : 'bg-white/10 border border-white/10'} mb-4 text-xs font-semibold`}>
+              <button
+                type="button"
+                onClick={() => setTogetherSubTab('bond')}
+                className={`flex-1 py-1.5 rounded-xl transition-all flex items-center justify-center gap-1 ${togetherSubTab === 'bond' ? 'bg-gradient-to-r from-pink-400 to-rose-500 text-white shadow-md' : currentTheme.isLight ? 'text-slate-600' : 'text-white/60'}`}
+              >
+                <span>🫀</span>
+                <span>لمس همزمان</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTogetherSubTab('question')}
+                className={`flex-1 py-1.5 rounded-xl transition-all flex items-center justify-center gap-1 ${togetherSubTab === 'question' ? 'bg-gradient-to-r from-pink-400 to-rose-500 text-white shadow-md' : currentTheme.isLight ? 'text-slate-600' : 'text-white/60'}`}
+              >
+                <span>💌</span>
+                <span>سوال روز</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTogetherSubTab('bucket')}
+                className={`flex-1 py-1.5 rounded-xl transition-all flex items-center justify-center gap-1 ${togetherSubTab === 'bucket' ? 'bg-gradient-to-r from-pink-400 to-rose-500 text-white shadow-md' : currentTheme.isLight ? 'text-slate-600' : 'text-white/60'}`}
+              >
+                <span>✨</span>
+                <span>آرزوها</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTogetherSubTab('capsule')}
+                className={`flex-1 py-1.5 rounded-xl transition-all flex items-center justify-center gap-1 ${togetherSubTab === 'capsule' ? 'bg-gradient-to-r from-pink-400 to-rose-500 text-white shadow-md' : currentTheme.isLight ? 'text-slate-600' : 'text-white/60'}`}
+              >
+                <span>⏳</span>
+                <span>کپسول</span>
+              </button>
+            </div>
+
+            {/* SUB-TAB 1: TWO SOULS BOND TOUCH */}
+            {togetherSubTab === 'bond' && (
+              <div className="flex-1 flex flex-col items-center justify-center py-6 text-center animate-fadeIn">
+                <div className="relative my-6 select-none cursor-pointer">
+                  {/* Outer pulsating rings */}
+                  {(myBondTouching && partnerBondTouching) && (
+                    <div className="absolute -inset-8 rounded-full bg-pink-400/30 blur-2xl animate-ping"></div>
+                  )}
+                  <div className={`relative w-44 h-44 rounded-full flex flex-col items-center justify-center shadow-2xl transition-all duration-300 border-4 ${
+                    myBondTouching && partnerBondTouching 
+                      ? 'bg-gradient-to-tr from-pink-500 via-rose-500 to-purple-600 border-white scale-110 shadow-pink-500/50' 
+                      : myBondTouching 
+                        ? 'bg-gradient-to-tr from-rose-400 to-pink-500 border-pink-300 scale-105' 
+                        : partnerBondTouching 
+                          ? 'bg-pink-100 border-pink-400 animate-pulse' 
+                          : currentTheme.isLight ? 'bg-white border-pink-200' : 'bg-white/5 border-white/20'
+                  }`}
+                    onMouseDown={handleBondTouchStart}
+                    onMouseUp={handleBondTouchEnd}
+                    onTouchStart={handleBondTouchStart}
+                    onTouchEnd={handleBondTouchEnd}
+                  >
+                    <Heart className={`w-16 h-16 ${myBondTouching || partnerBondTouching ? 'fill-white text-white' : 'text-pink-400'} heart-pulse`} />
+                    <span className={`text-[11px] font-bold mt-2 ${myBondTouching || partnerBondTouching ? 'text-white' : currentTheme.isLight ? 'text-slate-600' : 'text-white/70'}`}>
+                      {myBondTouching && partnerBondTouching 
+                        ? '❤️ پیوند قلب‌ها برقرار شد!' 
+                        : myBondTouching 
+                          ? 'در حال لمس... منتظر عشقت' 
+                          : partnerBondTouching 
+                            ? 'عشقت صفحه را لمس کرده! 💓' 
+                            : 'انگشتت را اینجا نگه دار'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className={`p-4 rounded-2xl max-w-xs ${currentTheme.isLight ? 'bg-white border border-pink-100 text-slate-700 shadow-sm' : 'bg-white/5 border border-white/10 text-white/80'} text-xs leading-relaxed`}>
+                  <p className="font-semibold text-pink-500 mb-1">✨ نحوه کارکرد تپش همزمان:</p>
+                  <p>وقتی هر دو نفر همزمان انگشتتان را روی قلب نگه دارید، حلقه نوری متصل شده و گوشی هر دو به‌صورت همزمان ویبره ضربان قلب می‌زند.</p>
+                </div>
+              </div>
+            )}
+
+            {/* SUB-TAB 2: DAILY COUPLE QUESTION */}
+            {togetherSubTab === 'question' && (
+              <div className="space-y-4 animate-fadeIn">
+                <div className={`p-4 rounded-3xl ${currentTheme.isLight ? 'bg-white border border-pink-100 shadow-sm' : 'glass-panel'} text-right`}>
+                  <span className="text-[10px] font-bold text-pink-500 px-2 py-0.5 rounded-full bg-pink-50 border border-pink-200">
+                    سوال اختصاصی امروز 💌
+                  </span>
+                  <h3 className={`text-sm font-bold ${currentTheme.isLight ? 'text-slate-800' : 'text-white'} mt-2 leading-relaxed`}>
+                    « {currentDailyQuestion} »
+                  </h3>
+                </div>
+
+                {/* My Answer */}
+                <div className={`p-4 rounded-3xl ${currentTheme.isLight ? 'bg-white border border-pink-100 shadow-sm' : 'glass-panel'} text-right`}>
+                  <h4 className="text-xs font-bold text-pink-500 mb-2">پاسخ شما:</h4>
+                  {myDailyAnswer ? (
+                    <div className={`p-3 rounded-2xl ${currentTheme.isLight ? 'bg-pink-50/70 border border-pink-100 text-slate-800' : 'bg-white/10 text-white'} text-xs leading-relaxed`}>
+                      {myDailyAnswer}
+                    </div>
+                  ) : (
+                    <form onSubmit={handleSaveDailyAnswer} className="space-y-2">
+                      <textarea
+                        rows={3}
+                        value={dailyInput}
+                        onChange={(e) => setDailyInput(e.target.value)}
+                        placeholder="پاسخ صمیمانه خودت را اینجا بنویس..."
+                        className={`w-full p-3 rounded-2xl text-xs ${currentTheme.isLight ? 'bg-slate-50 border border-pink-200 text-slate-800 placeholder-slate-400' : 'bg-white/5 border border-white/10 text-white'} focus:outline-none focus:ring-1 focus:ring-pink-400 resize-none`}
+                      />
+                      <button
+                        type="submit"
+                        className="w-full py-2.5 rounded-xl bg-gradient-to-r from-pink-400 to-rose-500 text-white font-bold text-xs shadow-md active:scale-98"
+                      >
+                        ثبت پاسخ من ✨
+                      </button>
+                    </form>
+                  )}
+                </div>
+
+                {/* Partner's Answer */}
+                <div className={`p-4 rounded-3xl ${currentTheme.isLight ? 'bg-white border border-pink-100 shadow-sm' : 'glass-panel'} text-right`}>
+                  <h4 className="text-xs font-bold text-pink-500 mb-2">پاسخ {partnerName}:</h4>
+                  {myDailyAnswer && partnerDailyAnswer ? (
+                    <div className={`p-3 rounded-2xl ${currentTheme.isLight ? 'bg-rose-50/80 border border-rose-200 text-slate-800' : 'bg-rose-950/40 text-white'} text-xs leading-relaxed animate-fadeIn`}>
+                      « {partnerDailyAnswer} »
+                    </div>
+                  ) : partnerDailyAnswer && !myDailyAnswer ? (
+                    <div className="p-4 rounded-2xl bg-pink-50/60 border border-pink-200 text-center text-xs text-slate-600">
+                      <p className="font-bold text-pink-600 mb-1">🔒 پاسخ عشقتان آماده است!</p>
+                      <p className="text-[11px]">برای فاش شدن و خواندن پاسخ، ابتدا پاسخ خود را در بالا بنویسید.</p>
+                    </div>
+                  ) : (
+                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-center text-xs text-slate-500">
+                      هنوز پاسخی از طرف عشقتان ثبت نشده است ⏳
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* SUB-TAB 3: SHARED BUCKET LIST */}
+            {togetherSubTab === 'bucket' && (
+              <div className="space-y-3 animate-fadeIn">
+                <form onSubmit={handleAddBucketItem} className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newBucketTitle}
+                    onChange={(e) => setNewBucketTitle(e.target.value)}
+                    placeholder="یک آرزو یا برنامه دونفره جدید بنویسید..."
+                    className={`flex-1 px-3.5 py-2.5 rounded-2xl text-xs ${currentTheme.isLight ? 'bg-white border border-pink-200 text-slate-800 placeholder-slate-400' : 'bg-white/5 border border-white/10 text-white'} focus:outline-none focus:ring-1 focus:ring-pink-400`}
+                  />
+                  <button
+                    type="submit"
+                    className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-pink-400 to-rose-500 text-white text-xs font-bold shadow-md shrink-0 active:scale-95"
+                  >
+                    افزودن ✨
+                  </button>
+                </form>
+
+                <div className="space-y-2 mt-2">
+                  {bucketList.map((item) => (
+                    <div
+                      key={item.id}
+                      onClick={() => handleToggleBucket(item.id, item.done)}
+                      className={`p-3 rounded-2xl border transition-all flex items-center justify-between cursor-pointer ${
+                        item.done 
+                          ? currentTheme.isLight ? 'bg-pink-50/60 border-pink-200 text-slate-400 line-through' : 'bg-white/5 border-white/10 text-white/50 line-through' 
+                          : currentTheme.isLight ? 'bg-white border-pink-100 text-slate-800 shadow-sm' : 'bg-white/5 border-white/10 text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className={`w-5 h-5 rounded-lg flex items-center justify-center border transition-colors ${item.done ? 'bg-pink-500 border-pink-500 text-white' : 'border-slate-300'}`}>
+                          {item.done && <Check className="w-3.5 h-3.5" />}
+                        </div>
+                        <span className="text-xs font-medium">{item.title}</span>
+                      </div>
+                      <span className="text-[9px] text-pink-400 font-mono">
+                        {item.addedBy}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* SUB-TAB 4: TIME CAPSULES */}
+            {togetherSubTab === 'capsule' && (
+              <div className="space-y-3 animate-fadeIn">
+                <button
+                  type="button"
+                  onClick={() => setShowAddCapsule(!showAddCapsule)}
+                  className="w-full py-2.5 rounded-2xl bg-gradient-to-r from-pink-400 to-rose-500 text-white text-xs font-bold shadow-md active:scale-98 flex items-center justify-center gap-1.5"
+                >
+                  <Gift className="w-4 h-4" />
+                  <span>ایجاد کپسول زمان جدید 💌</span>
+                </button>
+
+                {showAddCapsule && (
+                  <form onSubmit={handleAddCapsule} className={`p-4 rounded-3xl ${currentTheme.isLight ? 'bg-white border border-pink-200 shadow-md' : 'glass-panel'} space-y-2.5 animate-fadeIn`}>
+                    <input
+                      type="text"
+                      value={newCapTitle}
+                      onChange={(e) => setNewCapTitle(e.target.value)}
+                      placeholder="عنوان کپسول (مثلاً: برای سالگردمون)"
+                      className={`w-full px-3 py-2 rounded-xl text-xs ${currentTheme.isLight ? 'bg-slate-50 border border-slate-200 text-slate-800' : 'bg-white/5 border border-white/10 text-white'} focus:outline-none`}
+                    />
+                    <textarea
+                      rows={3}
+                      value={newCapContent}
+                      onChange={(e) => setNewCapContent(e.target.value)}
+                      placeholder="نامه یا یادداشت محرمانه شما که تا تاریخ مشخص قفل می‌ماند..."
+                      className={`w-full p-3 rounded-xl text-xs ${currentTheme.isLight ? 'bg-slate-50 border border-slate-200 text-slate-800' : 'bg-white/5 border border-white/10 text-white'} focus:outline-none resize-none`}
+                    />
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-slate-500">تاریخ باز شدن:</span>
+                      <input
+                        type="date"
+                        value={newCapUnlockDate}
+                        onChange={(e) => setNewCapUnlockDate(e.target.value)}
+                        className={`flex-1 px-3 py-1.5 rounded-xl text-xs ${currentTheme.isLight ? 'bg-slate-50 border border-slate-200 text-slate-800' : 'bg-white/5 border border-white/10 text-white'} focus:outline-none`}
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      className="w-full py-2 rounded-xl bg-pink-500 text-white text-xs font-bold shadow active:scale-98"
+                    >
+                      مهروموم کردن و قفل کپسول 🔒
+                    </button>
+                  </form>
+                )}
+
+                <div className="space-y-2.5 mt-2">
+                  {capsules.map((cap) => {
+                    const isUnlocked = new Date(cap.unlockDate).getTime() <= Date.now();
+                    return (
+                      <div
+                        key={cap.id}
+                        className={`p-4 rounded-2xl border transition-all ${
+                          isUnlocked 
+                            ? currentTheme.isLight ? 'bg-white border-pink-200 shadow-sm' : 'glass-panel' 
+                            : currentTheme.isLight ? 'bg-pink-50/50 border-pink-100' : 'bg-white/5 border-white/10'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1.5">
+                          <h4 className="text-xs font-bold text-pink-500 flex items-center gap-1.5">
+                            {isUnlocked ? '🔓' : '🔒'}
+                            <span>{cap.title}</span>
+                          </h4>
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            {cap.unlockDate}
+                          </span>
+                        </div>
+                        {isUnlocked ? (
+                          <p className="text-xs leading-relaxed text-slate-700 mt-2">
+                            {cap.content}
+                          </p>
+                        ) : (
+                          <div className="p-2.5 rounded-xl bg-white/40 border border-pink-100 text-center text-[11px] text-slate-500 mt-2">
+                            ⏳ این کپسول تا تاریخ <span className="font-bold text-pink-500 font-mono">{cap.unlockDate}</span> قفل است و نمی‌توان آن را باز کرد.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ---------------------------------------------------- */}
+        {/* TAB 3: MEMORIES & MILESTONES */}
         {/* ---------------------------------------------------- */}
         {activeTab === 'memories' && (
           <div className="flex-1 flex flex-col overflow-hidden relative z-10">
@@ -2101,18 +2671,26 @@ export default function App() {
         {/* ---------------------------------------------------- */}
         {/* BOTTOM NAVIGATION BAR */}
         {/* ---------------------------------------------------- */}
-        <div className="relative z-30 bg-black/85 backdrop-blur-2xl border-t border-white/10 px-6 py-2.5 flex items-center justify-around shadow-2xl">
+        <div className={`relative z-30 ${currentTheme.isLight ? 'bg-white/95 border-pink-100 shadow-xl' : 'bg-black/85 border-white/10 shadow-2xl'} backdrop-blur-2xl border-t px-3 py-2 flex items-center justify-around transition-colors`}>
           <button 
             onClick={() => setActiveTab('chat')}
-            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'chat' ? 'text-pink-400 font-bold scale-105' : 'text-white/40 hover:text-white/80'}`}
+            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'chat' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
           >
             <MessageCircle className="w-5 h-5" />
             <span className="text-[10px]">گفتگو</span>
           </button>
 
           <button 
+            onClick={() => setActiveTab('together')}
+            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'together' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
+          >
+            <HeartHandshake className="w-5 h-5" />
+            <span className="text-[10px]">با هم</span>
+          </button>
+
+          <button 
             onClick={() => setActiveTab('memories')}
-            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'memories' ? 'text-pink-400 font-bold scale-105' : 'text-white/40 hover:text-white/80'}`}
+            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'memories' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
           >
             <BookHeart className="w-5 h-5" />
             <span className="text-[10px]">خاطرات</span>
@@ -2120,7 +2698,7 @@ export default function App() {
 
           <button 
             onClick={() => setActiveTab('playlist')}
-            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'playlist' ? 'text-pink-400 font-bold scale-105' : 'text-white/40 hover:text-white/80'}`}
+            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'playlist' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
           >
             <Music className="w-5 h-5" />
             <span className="text-[10px]">موزیک</span>
@@ -2128,7 +2706,7 @@ export default function App() {
 
           <button 
             onClick={() => setActiveTab('profile')}
-            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'profile' ? 'text-pink-400 font-bold scale-105' : 'text-white/40 hover:text-white/80'}`}
+            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'profile' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
           >
             <User className="w-5 h-5" />
             <span className="text-[10px]">پروفایل</span>

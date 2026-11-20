@@ -12,6 +12,7 @@ const TOPIC_DELETE = `${ROOM_CHANNEL}/delete`;
 const TOPIC_SEEN = `${ROOM_CHANNEL}/seen`;
 const TOPIC_PRESENCE = `${ROOM_CHANNEL}/presence`;
 const TOPIC_PROFILE = `${ROOM_CHANNEL}/profile`;
+const TOPIC_TOGETHER = `${ROOM_CHANNEL}/together`;
 
 // High-speed, low-overhead cloud peers
 const GUN_PEERS = [
@@ -59,7 +60,8 @@ export function initCloudSync({
   onDeleteMessage, 
   onSeen,
   onPresence,
-  onProfile, 
+  onProfile,
+  onTogetherAction, 
   onStatusChange 
 }) {
   // 1. Initial Cloud Database Catch-up (using .once so it doesn't burn CPU in background)
@@ -157,7 +159,8 @@ export function initCloudSync({
           TOPIC_DELETE,
           TOPIC_SEEN,
           TOPIC_PRESENCE,
-          TOPIC_PROFILE
+          TOPIC_PROFILE,
+          TOPIC_TOGETHER
         ], (err) => {
           if (err) console.error('Sub error:', err);
         });
@@ -194,6 +197,8 @@ export function initCloudSync({
             onPresence(data);
           } else if (topic === TOPIC_PROFILE && onProfile) {
             onProfile(data);
+          } else if (topic === TOPIC_TOGETHER && onTogetherAction) {
+            onTogetherAction(data);
           }
         } catch (e) {
           console.error('MQTT parse error:', e);
@@ -317,5 +322,17 @@ export function sendCloudProfile(profileData) {
   }
   if (client && client.connected) {
     client.publish(TOPIC_PROFILE, JSON.stringify(profileData), { qos: 1 });
+  }
+}
+
+export function sendCloudTogetherAction(actionData) {
+  const room = getGunRoom();
+  if (room && actionData && actionData.type) {
+    try {
+      room.get('together').get(actionData.type).put(JSON.stringify(actionData));
+    } catch (e) {}
+  }
+  if (client && client.connected) {
+    client.publish(TOPIC_TOGETHER, JSON.stringify(actionData), { qos: 1 });
   }
 }
