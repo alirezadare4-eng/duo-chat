@@ -42,6 +42,24 @@
   box-sizing: border-box;
 }
 
+html, body {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  position: fixed;
+  inset: 0;
+}
+
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 /* Telegram message bubble tails */
 .bubble-out {
   position: relative;
@@ -60,6 +78,69 @@
 }
 .heart-pop-anim {
   animation: heartPop 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+/* Telegram-style Spring Message Entrance */
+@keyframes msgPopIn {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.94);
+  }
+  60% {
+    transform: translateY(-2px) scale(1.01);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.animate-msg-pop {
+  animation: msgPopIn 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* Living Radar Aura for Online Status */
+@keyframes livingAura {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5), 0 0 0 0 rgba(244, 114, 182, 0.35);
+  }
+  70% {
+    transform: scale(1.04);
+    box-shadow: 0 0 0 10px rgba(16, 185, 129, 0), 0 0 0 16px rgba(244, 114, 182, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0), 0 0 0 0 rgba(244, 114, 182, 0);
+  }
+}
+.online-aura {
+  animation: livingAura 2.2s infinite ease-out;
+}
+
+/* Send sparkle animation */
+@keyframes sendSparkle {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(0.6) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-50px) scale(1.2) rotate(15deg);
+  }
+}
+.animate-send-sparkle {
+  animation: sendSparkle 0.7s ease-out forwards;
+}
+
+/* Micro bounce for double tick */
+@keyframes tickPop {
+  0% { transform: scale(0.5); opacity: 0; }
+  70% { transform: scale(1.25); }
+  100% { transform: scale(1); opacity: 1; }
+}
+.tick-pop {
+  animation: tickPop 0.25s ease-out forwards;
 }
 
 /* Voice waveform pulse */

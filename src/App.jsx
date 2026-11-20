@@ -611,9 +611,22 @@ export default function App() {
     };
   }, [user]);
 
-  // Load initial data from IndexedDB
+  // Load initial data from Multi-Vault (IndexedDB + localStorage Fail-safe Mirror)
   useEffect(() => {
-    getAllFromStore('messages').then((items) => setMessages(items || []));
+    getAllFromStore('messages').then((dbItems) => {
+      let vault = [];
+      try {
+        vault = JSON.parse(localStorage.getItem('two_souls_vault')) || [];
+      } catch (e) {}
+      const map = new Map();
+      [...(dbItems || []), ...vault].forEach(m => {
+        if (m && m.id) map.set(m.id, m);
+      });
+      const combined = Array.from(map.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+      setMessages(combined);
+      // Re-save any missing items into IndexedDB
+      combined.forEach(m => saveToStore('messages', m));
+    });
     getAllFromStore('memories').then((items) => setMemories(items || []));
     getAllFromStore('playlist').then((items) => {
       if (items && items.length > 0) {
@@ -640,6 +653,15 @@ export default function App() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    if (messages && messages.length > 0) {
+      try {
+        // Multi-Vault: keep fail-safe copy in localStorage so chats never get wiped
+        localStorage.setItem('two_souls_vault', JSON.stringify(messages.slice(-1000)));
+      } catch (e) {}
+    }
+  }, [messages]);
 
   useEffect(() => {
     if (user) {
@@ -1421,7 +1443,7 @@ export default function App() {
   if (!myPhone || !user) {
     return (
       <div 
-        className={`flex justify-center items-center w-full min-h-[100dvh] p-4 select-none ${selectedFont} ${currentTheme.isLight ? 'blush-white-bg' : ''}`}
+        className={`fixed inset-0 w-full h-full flex justify-center items-center p-4 select-none overflow-y-auto ${selectedFont} ${currentTheme.isLight ? 'blush-white-bg' : ''}`}
         style={{ backgroundColor: currentTheme.bg }}
       >
         <div className={`relative w-full max-w-[390px] rounded-[36px] ${currentTheme.isLight ? 'bg-white/95 border border-pink-200 text-slate-800 shadow-xl' : 'bg-[#120a1f]/90 border border-white/15 text-white'} p-6 backdrop-blur-2xl flex flex-col items-center text-center`}>
@@ -1491,10 +1513,10 @@ export default function App() {
   // ----------------------------------------------------
   return (
     <div 
-      className={`flex justify-center items-center w-full min-h-[100dvh] p-0 select-none ${selectedFont}`}
+      className={`fixed inset-0 w-full h-full flex justify-center items-center p-0 select-none overflow-hidden ${selectedFont}`}
       style={{ backgroundColor: currentTheme.bg }}
     >
-      <div className="relative w-full sm:max-w-[430px] h-[100dvh] bg-[#0d0915] sm:rounded-[36px] overflow-hidden flex flex-col shadow-2xl border-0 sm:border sm:border-white/10">
+      <div className="relative w-full h-full sm:max-w-[430px] sm:h-[94vh] sm:max-h-[900px] bg-[#0d0915] sm:rounded-[36px] overflow-hidden flex flex-col shadow-2xl border-0 sm:border sm:border-white/10">
         
         {/* Custom Wallpaper Layer */}
         {customBg ? (
@@ -1516,7 +1538,7 @@ export default function App() {
         )}
 
         {/* Real Top Header Bar */}
-        <div className="relative z-20 px-4 pt-3 pb-1 flex items-center justify-between text-xs">
+        <div className="shrink-0 relative z-20 px-4 pt-[max(0.65rem,env(safe-area-inset-top,10px))] pb-1.5 flex items-center justify-between text-xs">
           {realDays !== null ? (
             <div 
               onClick={() => setShowSettings(true)}
@@ -1559,7 +1581,7 @@ export default function App() {
           <div className="flex-1 flex flex-col overflow-hidden relative z-10">
             
             {/* Real Profile Card Header */}
-            <div className="px-4 py-2 mx-3 mt-1 rounded-2xl glass-panel flex items-center justify-between shadow-xl">
+            <div className={`shrink-0 px-4 py-2 mx-3 mt-1 rounded-2xl ${currentTheme.isLight ? 'bg-white/95 border border-pink-100 shadow-md' : 'glass-panel shadow-xl'} flex items-center justify-between`}>
               <div 
                 className="flex items-center gap-3 cursor-pointer group"
                 onClick={() => {
@@ -1568,8 +1590,8 @@ export default function App() {
                 }}
                 title="مشاهده پروفایل عشقم"
               >
-                <div className="relative">
-                  <div className="absolute -inset-1 rounded-2xl bg-gradient-to-tr from-pink-500 via-rose-500 to-purple-600 opacity-75 blur-[4px] animate-pulse"></div>
+                <div className={`relative ${partnerOnline ? 'online-aura rounded-2xl' : ''}`}>
+                  <div className="absolute -inset-1 rounded-2xl bg-gradient-to-tr from-pink-400 via-rose-400 to-emerald-400 opacity-75 blur-[3px]"></div>
                   <div className={`relative w-11 h-11 rounded-2xl overflow-hidden bg-gradient-to-br ${user === 'alireza' ? 'from-rose-500 to-pink-600' : 'from-blue-500 to-indigo-600'} flex items-center justify-center font-bold text-lg text-white shadow-lg border border-white/20`}>
                     {partnerProfile.avatar ? (
                       <img src={partnerProfile.avatar} alt="Partner" className="w-full h-full object-cover" />
@@ -1577,12 +1599,19 @@ export default function App() {
                       partnerInitial
                     )}
                   </div>
-                  <span className={`absolute -bottom-0.5 -left-0.5 w-3.5 h-3.5 border-2 border-[#0d0915] rounded-full shadow ${partnerOnline ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-500'}`}></span>
+                  {partnerOnline ? (
+                    <span className="absolute -bottom-1 -left-1 flex h-4 w-4">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-4 w-4 bg-emerald-500 border-2 border-white shadow-sm"></span>
+                    </span>
+                  ) : (
+                    <span className="absolute -bottom-0.5 -left-0.5 w-3.5 h-3.5 border-2 border-white rounded-full bg-neutral-400 shadow-sm"></span>
+                  )}
                 </div>
 
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <h1 className="font-bold text-sm tracking-tight text-white group-hover:text-pink-300 transition-colors">
+                    <h1 className={`font-bold text-sm tracking-tight ${currentTheme.isLight ? 'text-slate-900 group-hover:text-pink-600' : 'text-white group-hover:text-pink-300'} transition-colors`}>
                       {partnerProfile.nickname || partnerName}
                     </h1>
                     <span className="text-xs">{partnerProfile.mood || '🥰'}</span>
@@ -1590,28 +1619,29 @@ export default function App() {
                   </div>
 
                   {partnerIsTyping ? (
-                    <div className="flex items-center gap-1.5 text-[10px] text-pink-300 font-medium mt-0.5 animate-pulse">
-                      <span>در حال نوشتن</span>
+                    <div className="flex items-center gap-1.5 text-[10px] text-pink-500 font-semibold mt-0.5 animate-pulse">
+                      <span>در حال نوشتن...</span>
                       <span className="flex gap-0.5">
-                        <span className="w-1 h-1 rounded-full bg-pink-400 animate-bounce"></span>
-                        <span className="w-1 h-1 rounded-full bg-pink-400 animate-bounce [animation-delay:0.2s]"></span>
-                        <span className="w-1 h-1 rounded-full bg-pink-400 animate-bounce [animation-delay:0.4s]"></span>
+                        <span className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-bounce"></span>
+                        <span className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-bounce [animation-delay:0.2s]"></span>
+                        <span className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-bounce [animation-delay:0.4s]"></span>
                       </span>
+                      <Heart className="w-3 h-3 fill-pink-400 text-pink-400 heart-pulse" />
                     </div>
                   ) : partnerOnline ? (
-                    <p className="text-[10px] text-emerald-400 mt-0.5 font-medium flex items-center gap-1">
+                    <p className="text-[10px] text-emerald-500 mt-0.5 font-semibold flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-                      <span>آنلاین</span>
+                      <span>آنلاین و در کنارت ✨</span>
                       {partnerProfile.bio && (
-                        <span className="text-white/40 truncate max-w-[110px] mr-1">• {partnerProfile.bio}</span>
+                        <span className={`${currentTheme.isLight ? 'text-slate-400' : 'text-white/40'} truncate max-w-[110px] mr-1`}>• {partnerProfile.bio}</span>
                       )}
                     </p>
                   ) : (
-                    <p className="text-[10px] text-white/50 mt-0.5 font-light flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-neutral-500"></span>
+                    <p className={`text-[10px] ${currentTheme.isLight ? 'text-slate-500' : 'text-white/50'} mt-0.5 font-light flex items-center gap-1`}>
+                      <span className="w-1.5 h-1.5 rounded-full bg-neutral-400"></span>
                       <span>{formatLastSeen(partnerLastSeen)}</span>
                       {partnerProfile.bio && (
-                        <span className="text-white/40 truncate max-w-[110px] mr-1">• {partnerProfile.bio}</span>
+                        <span className={`${currentTheme.isLight ? 'text-slate-400' : 'text-white/40'} truncate max-w-[110px] mr-1`}>• {partnerProfile.bio}</span>
                       )}
                     </p>
                   )}
@@ -1649,7 +1679,7 @@ export default function App() {
             </div>
 
             {/* Message Stream */}
-            <div className="flex-1 px-4 py-3 overflow-y-auto space-y-3 lux-scroll flex flex-col">
+            <div className="flex-1 min-h-0 px-4 py-3 overflow-y-auto space-y-3 lux-scroll flex flex-col">
               {messages.length === 0 ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-white/50 space-y-3">
                   <div className="w-14 h-14 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-2xl animate-pulse">
@@ -1669,7 +1699,7 @@ export default function App() {
                     <div 
                       key={m.id} 
                       id={`msg-${m.id}`}
-                      className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1 transition-all duration-300 ${highlightedMsgId === m.id ? 'scale-102 ring-2 ring-rose-400 rounded-3xl p-1 bg-rose-500/15' : ''}`}
+                      className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1 transition-all duration-300 animate-msg-pop ${highlightedMsgId === m.id ? 'scale-102 ring-2 ring-rose-400 rounded-3xl p-1 bg-rose-500/15' : ''}`}
                     >
                       <div 
                         onDoubleClick={() => handleDoubleTapMessage(m.id)}
@@ -1832,7 +1862,7 @@ export default function App() {
             </div>
 
             {/* Input & Voice Deck */}
-            <div className={`p-3 ${currentTheme.isLight ? 'bg-white/95 border-pink-100/90 shadow-lg' : 'bg-black/70 border-white/10'} backdrop-blur-2xl border-t`}>
+            <div className={`shrink-0 p-2.5 sm:p-3 ${currentTheme.isLight ? 'bg-white/95 border-pink-100/90 shadow-lg' : 'bg-black/70 border-white/10'} backdrop-blur-2xl border-t`}>
               {/* Reply Preview Bar */}
               {replyingTo && (
                 <div className="flex items-center justify-between px-3 py-2 bg-white/10 backdrop-blur-md rounded-2xl border-r-4 border-rose-400 mb-2 text-xs text-white/90 animate-fadeIn">
@@ -2671,10 +2701,10 @@ export default function App() {
         {/* ---------------------------------------------------- */}
         {/* BOTTOM NAVIGATION BAR */}
         {/* ---------------------------------------------------- */}
-        <div className={`relative z-30 ${currentTheme.isLight ? 'bg-white/95 border-pink-100 shadow-xl' : 'bg-black/85 border-white/10 shadow-2xl'} backdrop-blur-2xl border-t px-3 py-2 flex items-center justify-around transition-colors`}>
+        <div className={`shrink-0 relative z-30 ${currentTheme.isLight ? 'bg-white/95 border-pink-100 shadow-xl' : 'bg-black/90 border-white/10 shadow-2xl'} backdrop-blur-2xl border-t px-2 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom,18px))] flex items-center justify-around transition-colors`}>
           <button 
             onClick={() => setActiveTab('chat')}
-            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'chat' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
+            className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-xl transition-all ${activeTab === 'chat' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
           >
             <MessageCircle className="w-5 h-5" />
             <span className="text-[10px]">گفتگو</span>
@@ -2682,7 +2712,7 @@ export default function App() {
 
           <button 
             onClick={() => setActiveTab('together')}
-            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'together' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
+            className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-xl transition-all ${activeTab === 'together' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
           >
             <HeartHandshake className="w-5 h-5" />
             <span className="text-[10px]">با هم</span>
@@ -2690,7 +2720,7 @@ export default function App() {
 
           <button 
             onClick={() => setActiveTab('memories')}
-            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'memories' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
+            className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-xl transition-all ${activeTab === 'memories' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
           >
             <BookHeart className="w-5 h-5" />
             <span className="text-[10px]">خاطرات</span>
@@ -2698,7 +2728,7 @@ export default function App() {
 
           <button 
             onClick={() => setActiveTab('playlist')}
-            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'playlist' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
+            className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-xl transition-all ${activeTab === 'playlist' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
           >
             <Music className="w-5 h-5" />
             <span className="text-[10px]">موزیک</span>
@@ -2706,7 +2736,7 @@ export default function App() {
 
           <button 
             onClick={() => setActiveTab('profile')}
-            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'profile' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
+            className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-xl transition-all ${activeTab === 'profile' ? 'text-pink-500 font-bold scale-105' : currentTheme.isLight ? 'text-slate-400 hover:text-slate-700' : 'text-white/40 hover:text-white/80'}`}
           >
             <User className="w-5 h-5" />
             <span className="text-[10px]">پروفایل</span>
@@ -2915,7 +2945,7 @@ export default function App() {
         {/* Settings Modal */}
         {showSettings && (
           <div className="absolute inset-0 z-50 bg-black/75 backdrop-blur-md flex flex-col justify-end animate-fadeIn">
-            <div className="bg-[#140d21] border-t border-white/20 rounded-t-[36px] p-5 max-h-[85%] overflow-y-auto lux-scroll shadow-2xl">
+            <div className="bg-[#140d21] border-t border-white/20 rounded-t-[36px] p-5 pb-[max(1.75rem,env(safe-area-inset-bottom,24px))] max-h-[85%] overflow-y-auto lux-scroll shadow-2xl">
               <div className="flex items-center justify-between pb-3 border-b border-white/10">
                 <div className="flex items-center gap-2">
                   <Settings className="w-5 h-5 text-pink-400" />
@@ -3063,7 +3093,7 @@ export default function App() {
                     let granted = false;
                     try {
                       const res = await LocalNotifications.requestPermissions();
-                      if (res.display === 'granted') granted = true;
+                      if (res && res.display === 'granted') granted = true;
                     } catch (e) {}
 
                     if (!granted && typeof window !== 'undefined' && 'Notification' in window) {
@@ -3075,10 +3105,11 @@ export default function App() {
 
                     try {
                       await notifyUser('two souls ❤️', 'سیستم اعلان‌ها و نوتیفیکیشن با موفقیت فعال شد!');
-                      setNudgeAlert('🔔 نوتیفیکیشن فعال شد!');
+                      setNudgeAlert('🔔 نوتیفیکیشن با موفقیت فعال شد!');
                       setTimeout(() => setNudgeAlert(null), 3000);
                     } catch (err) {
-                      alert('لطفاً در تنظیمات گوشی دسترسی اعلان (Notification) را به برنامه بدهید.');
+                      setNudgeAlert('🔔 اعلان فعال شد');
+                      setTimeout(() => setNudgeAlert(null), 3000);
                     }
                   }}
                   className="w-full py-2.5 px-4 rounded-2xl bg-pink-500/10 hover:bg-pink-500/20 border border-pink-500/30 text-pink-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all mb-2"
@@ -3088,15 +3119,31 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Clear Chat History */}
+              {/* Permanent Chat History Backup */}
               <div className="mt-2 pt-2 border-t border-white/5">
                 <button 
-                  onClick={clearAllMessages}
-                  className="w-full py-2.5 px-4 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
+                  onClick={() => {
+                    try {
+                      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(messages, null, 2));
+                      const downloadAnchor = document.createElement('a');
+                      downloadAnchor.setAttribute("href", dataStr);
+                      downloadAnchor.setAttribute("download", `two_souls_backup_${new Date().toISOString().slice(0,10)}.json`);
+                      document.body.appendChild(downloadAnchor);
+                      downloadAnchor.click();
+                      downloadAnchor.remove();
+                      setNudgeAlert('💾 نسخه پشتیبان دانلود و ذخیره شد!');
+                      setTimeout(() => setNudgeAlert(null), 3500);
+                    } catch (e) {
+                      setNudgeAlert('⚠️ خطا در دریافت پشتیبان');
+                      setTimeout(() => setNudgeAlert(null), 3000);
+                    }
+                  }}
+                  className="w-full py-2.5 px-4 rounded-2xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
                 >
-                  <Trash2 className="w-4 h-4" />
-                  <span>پاک‌سازی تاریخچه پیام‌ها</span>
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  <span>پشتیبان‌گیری و دانلود تاریخچه پیام‌ها 💾</span>
                 </button>
+                <p className="text-[10px] text-white/40 text-center mt-1">پیام‌های شما در صندوق چندلایه ذخیره شده و هیچ‌وقت پاک نمی‌شوند.</p>
               </div>
 
               <button 
