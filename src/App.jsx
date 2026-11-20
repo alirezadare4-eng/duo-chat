@@ -31,7 +31,8 @@ import {
   Lock,
   Reply,
   Copy,
-  MoreHorizontal
+  MoreHorizontal,
+  Bell
 } from 'lucide-react';
 import { 
   initCloudSync, 
@@ -237,6 +238,64 @@ export default function App() {
     } catch (e) {}
   };
 
+  const notifyUser = (title, body) => {
+    playChime();
+    if ('vibrate' in navigator) {
+      navigator.vibrate([200, 100, 200]);
+    }
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission === 'granted') {
+        try {
+          new Notification(title, {
+            body,
+            icon: '/icon.svg',
+            badge: '/icon.svg',
+            vibrate: [200, 100, 200]
+          });
+        } catch (e) {
+          if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+            navigator.serviceWorker.ready.then((reg) => {
+              reg.showNotification(title, {
+                body,
+                icon: '/icon.svg',
+                vibrate: [200, 100, 200]
+              });
+            });
+          }
+        }
+      } else if (Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+    }
+  };
+
+  // Online / Offline Internet connection monitoring
+  useEffect(() => {
+    const handleOnline = () => {
+      setNudgeAlert('📶 اتصال اینترنت برقرار شد');
+      setTimeout(() => setNudgeAlert(null), 3000);
+      if (user) {
+        sendCloudPresence({ user, status: 'online', timestamp: Date.now() });
+      }
+    };
+    const handleOffline = () => {
+      setNudgeAlert('⚠️ اینترنت قطع شد');
+      setTimeout(() => setNudgeAlert(null), 4000);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [user]);
+
   // Load initial data from IndexedDB
   useEffect(() => {
     getAllFromStore('messages').then((items) => setMessages(items || []));
@@ -333,8 +392,9 @@ export default function App() {
             sendCloudSeen({ reader: user, messageIds: [msg.id], timestamp: nowTs });
           }
 
-          playChime();
-          if ('vibrate' in navigator) navigator.vibrate(200);
+          const partnerDisplay = user === 'alireza' ? 'فاطمه من 🌸' : 'علیرضای من 👨‍💻';
+          const previewText = msg.type === 'text' ? msg.text : msg.type === 'audio' ? 'یک پیام صوتی فرستاد 🎙️' : 'یک عکس فرستاد 📷';
+          notifyUser(partnerDisplay, previewText);
         }
       },
       onNudge: ({ sender }) => {
@@ -436,7 +496,15 @@ export default function App() {
         if (fromUser !== user) {
           const nowTs = timestamp || Date.now();
           if (status === 'online') {
-            setPartnerOnline(true);
+            setPartnerOnline((prevWasOnline) => {
+              if (!prevWasOnline) {
+                const pName = user === 'alireza' ? 'فاطمه' : 'علیرضا';
+                setNudgeAlert(`🟢 ${pName} آنلاین شد!`);
+                setTimeout(() => setNudgeAlert(null), 3500);
+                notifyUser('وضعیت اتصال 🟢', `${pName} به اینترنت متصل و آنلاین شد!`);
+              }
+              return true;
+            });
             setPartnerLastSeen(nowTs);
             localStorage.setItem('duo_partner_last_seen', nowTs);
             if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
@@ -2003,8 +2071,33 @@ export default function App() {
                 )}
               </div>
 
-              {/* Clear Chat History */}
+              {/* Notification Permission & Test */}
               <div className="mt-5 pt-4 border-t border-white/10">
+                <button 
+                  onClick={() => {
+                    if ('Notification' in window) {
+                      Notification.requestPermission().then((perm) => {
+                        if (perm === 'granted') {
+                          notifyUser('تست نوتیفیکیشن 🔔', 'سیستم اعلان‌ها با موفقیت فعال شد!');
+                          setNudgeAlert('🔔 نوتیفیکیشن فعال شد!');
+                          setTimeout(() => setNudgeAlert(null), 3000);
+                        } else {
+                          alert('دسترسی نوتیفیکیشن در مرورگر داده نشد. لطفاً در تنظیمات مرورگر اجازه دهید.');
+                        }
+                      });
+                    } else {
+                      alert('مرورگر شما از نوتیفیکیشن وب پشتیبانی نمی‌کند.');
+                    }
+                  }}
+                  className="w-full py-2.5 px-4 rounded-2xl bg-pink-500/10 hover:bg-pink-500/20 border border-pink-500/30 text-pink-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all mb-2"
+                >
+                  <Bell className="w-4 h-4 text-pink-400" />
+                  <span>فعال‌سازی و تست اعلان‌ها (نوتیفیکیشن) 🔔</span>
+                </button>
+              </div>
+
+              {/* Clear Chat History */}
+              <div className="mt-2 pt-2 border-t border-white/5">
                 <button 
                   onClick={clearAllMessages}
                   className="w-full py-2.5 px-4 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
