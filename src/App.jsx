@@ -33,7 +33,12 @@ import {
   Reply,
   Copy,
   MoreHorizontal,
-  Bell
+  Bell,
+  User,
+  Camera,
+  Smile,
+  Edit3,
+  Sparkles
 } from 'lucide-react';
 import { 
   initCloudSync, 
@@ -44,7 +49,8 @@ import {
   sendCloudPlaylist,
   sendCloudDelete,
   sendCloudSeen,
-  sendCloudPresence 
+  sendCloudPresence,
+  sendCloudProfile
 } from './cloudSync';
 import { compressImage, generateMessageId, formatSeconds } from './utils';
 import { getAllFromStore, saveToStore, deleteFromStore, clearStore } from './db';
@@ -216,6 +222,96 @@ export default function App() {
   const memoryMediaInputRef = useRef(null);
   const songInputRef = useRef(null);
   const audioContextRef = useRef(null);
+
+  // Profile State
+  const [profileTab, setProfileTab] = useState('my'); // 'my' or 'partner'
+  const [myProfile, setMyProfile] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('two_souls_my_profile')) || {
+        avatar: '',
+        nickname: '',
+        bio: 'همیشه در قلب من هستی ✨❤️',
+        mood: '🥰'
+      };
+    } catch (e) {
+      return {
+        avatar: '',
+        nickname: '',
+        bio: 'همیشه در قلب من هستی ✨❤️',
+        mood: '🥰'
+      };
+    }
+  });
+
+  const [partnerProfile, setPartnerProfile] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('two_souls_partner_profile')) || {
+        avatar: '',
+        nickname: '',
+        bio: '',
+        mood: '🥰'
+      };
+    } catch (e) {
+      return {
+        avatar: '',
+        nickname: '',
+        bio: '',
+        mood: '🥰'
+      };
+    }
+  });
+
+  const [editNickname, setEditNickname] = useState('');
+  const [editBio, setEditBio] = useState('');
+  const [editMood, setEditMood] = useState('🥰');
+  const [editAvatar, setEditAvatar] = useState('');
+  const avatarInputRef = useRef(null);
+
+  const MOOD_OPTIONS = [
+    { emoji: '🥰', label: 'عاشقانه' },
+    { emoji: '🥺', label: 'دلتنگتم' },
+    { emoji: '🥱', label: 'بغل می‌خوام' },
+    { emoji: '☕', label: 'سرکار / شلوغ' },
+    { emoji: '🌸', label: 'آروم و ریلکس' },
+    { emoji: '🎉', label: 'پرانرژی' },
+    { emoji: '🤒', label: 'بی‌حال' },
+    { emoji: '🌙', label: 'شب‌بخیر' }
+  ];
+
+  useEffect(() => {
+    setEditNickname(myProfile.nickname || (user === 'alireza' ? 'علیرضا' : 'فاطمه'));
+    setEditBio(myProfile.bio || 'همیشه در قلب من هستی ✨❤️');
+    setEditMood(myProfile.mood || '🥰');
+    setEditAvatar(myProfile.avatar || '');
+  }, [myProfile, user]);
+
+  const handleSaveProfile = (e) => {
+    if (e) e.preventDefault();
+    const updated = {
+      user,
+      nickname: editNickname.trim() || (user === 'alireza' ? 'علیرضا' : 'فاطمه'),
+      bio: editBio.trim(),
+      mood: editMood,
+      avatar: editAvatar,
+      updatedAt: Date.now()
+    };
+    setMyProfile(updated);
+    localStorage.setItem('two_souls_my_profile', JSON.stringify(updated));
+    sendCloudProfile(updated);
+    setNudgeAlert('پروفایل با موفقیت ذخیره و برای عشقت ارسال شد! ✨💖');
+    setTimeout(() => setNudgeAlert(null), 3500);
+  };
+
+  const handleAvatarFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const compressed = await compressImage(file, 400, 400, 0.7);
+      setEditAvatar(compressed);
+    } catch (err) {
+      console.error('Avatar upload error:', err);
+    }
+  };
 
   const playChime = () => {
     try {
@@ -413,9 +509,11 @@ export default function App() {
             sendCloudSeen({ reader: user, messageIds: [msg.id], timestamp: nowTs });
           }
 
-          const partnerDisplay = user === 'alireza' ? 'فاطمه من 🌸' : 'علیرضای من 👨‍💻';
-          const previewText = msg.type === 'text' ? msg.text : msg.type === 'audio' ? 'یک پیام صوتی فرستاد 🎙️' : 'یک عکس فرستاد 📷';
-          notifyUser(partnerDisplay, previewText);
+          if (!msg.isHistorical) {
+            const partnerDisplay = user === 'alireza' ? 'فاطمه من 🌸' : 'علیرضای من 👨‍💻';
+            const previewText = msg.type === 'text' ? msg.text : msg.type === 'audio' ? 'یک پیام صوتی فرستاد 🎙️' : 'یک عکس فرستاد 📷';
+            notifyUser(partnerDisplay, previewText);
+          }
         }
       },
       onNudge: ({ sender }) => {
@@ -537,8 +635,36 @@ export default function App() {
             if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
           }
         }
+      },
+      onProfile: (data) => {
+        if (data && data.user) {
+          if (data.user !== user) {
+            setPartnerProfile(data);
+            localStorage.setItem('two_souls_partner_profile', JSON.stringify(data));
+          } else {
+            setMyProfile(data);
+            localStorage.setItem('two_souls_my_profile', JSON.stringify(data));
+          }
+        }
       }
     });
+
+    // Broadcast our profile on startup
+    const savedMyProfile = localStorage.getItem('two_souls_my_profile');
+    if (savedMyProfile) {
+      try {
+        const parsed = JSON.parse(savedMyProfile);
+        sendCloudProfile({ user, ...parsed });
+      } catch (e) {}
+    } else {
+      sendCloudProfile({
+        user,
+        nickname: user === 'alireza' ? 'علیرضا' : 'فاطمه',
+        bio: 'همیشه در قلب من هستی ✨❤️',
+        mood: '🥰',
+        avatar: ''
+      });
+    }
   }, [user]);
 
   const calculateRealDays = () => {
@@ -679,7 +805,7 @@ export default function App() {
       if (document.visibilityState === 'visible') {
         sendCloudPresence({ user, status: 'online', timestamp: Date.now() });
       }
-    }, 7000);
+    }, 25000);
 
     return () => {
       clearInterval(hbInterval);
@@ -1177,18 +1303,32 @@ export default function App() {
             
             {/* Real Profile Card Header */}
             <div className="px-4 py-2 mx-3 mt-1 rounded-2xl glass-panel flex items-center justify-between shadow-xl">
-              <div className="flex items-center gap-3">
-                <div className="relative cursor-pointer" onClick={() => setShowHeartBurst(true)}>
+              <div 
+                className="flex items-center gap-3 cursor-pointer group"
+                onClick={() => {
+                  setProfileTab('partner');
+                  setActiveTab('profile');
+                }}
+                title="مشاهده پروفایل عشقم"
+              >
+                <div className="relative">
                   <div className="absolute -inset-1 rounded-2xl bg-gradient-to-tr from-pink-500 via-rose-500 to-purple-600 opacity-75 blur-[4px] animate-pulse"></div>
-                  <div className={`relative w-11 h-11 rounded-2xl bg-gradient-to-br ${user === 'alireza' ? 'from-rose-500 to-pink-600' : 'from-blue-500 to-indigo-600'} flex items-center justify-center font-bold text-lg text-white shadow-lg border border-white/20`}>
-                    {partnerInitial}
+                  <div className={`relative w-11 h-11 rounded-2xl overflow-hidden bg-gradient-to-br ${user === 'alireza' ? 'from-rose-500 to-pink-600' : 'from-blue-500 to-indigo-600'} flex items-center justify-center font-bold text-lg text-white shadow-lg border border-white/20`}>
+                    {partnerProfile.avatar ? (
+                      <img src={partnerProfile.avatar} alt="Partner" className="w-full h-full object-cover" />
+                    ) : (
+                      partnerInitial
+                    )}
                   </div>
                   <span className={`absolute -bottom-0.5 -left-0.5 w-3.5 h-3.5 border-2 border-[#0d0915] rounded-full shadow ${partnerOnline ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-500'}`}></span>
                 </div>
 
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <h1 className="font-bold text-sm tracking-tight text-white">{partnerName}</h1>
+                    <h1 className="font-bold text-sm tracking-tight text-white group-hover:text-pink-300 transition-colors">
+                      {partnerProfile.nickname || partnerName}
+                    </h1>
+                    <span className="text-xs">{partnerProfile.mood || '🥰'}</span>
                     <Heart className="w-3.5 h-3.5 fill-rose-500 text-rose-500 heart-pulse" />
                   </div>
 
@@ -1205,17 +1345,34 @@ export default function App() {
                     <p className="text-[10px] text-emerald-400 mt-0.5 font-medium flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
                       <span>آنلاین</span>
+                      {partnerProfile.bio && (
+                        <span className="text-white/40 truncate max-w-[110px] mr-1">• {partnerProfile.bio}</span>
+                      )}
                     </p>
                   ) : (
                     <p className="text-[10px] text-white/50 mt-0.5 font-light flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-neutral-500"></span>
                       <span>{formatLastSeen(partnerLastSeen)}</span>
+                      {partnerProfile.bio && (
+                        <span className="text-white/40 truncate max-w-[110px] mr-1">• {partnerProfile.bio}</span>
+                      )}
                     </p>
                   )}
                 </div>
               </div>
 
               <div className="flex items-center gap-1.5">
+                <button 
+                  onClick={() => {
+                    setProfileTab('my');
+                    setActiveTab('profile');
+                  }}
+                  className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 hover:text-white transition-all active:scale-95"
+                  title="پروفایل من"
+                >
+                  <User className="w-4 h-4 text-pink-400" />
+                </button>
+
                 <button 
                   onClick={sendNudge}
                   className="p-2.5 rounded-xl bg-pink-500/20 hover:bg-pink-500/30 border border-pink-500/30 text-rose-400 transition-all active:scale-90"
@@ -1721,6 +1878,227 @@ export default function App() {
         )}
 
         {/* ---------------------------------------------------- */}
+        {/* TAB 4: PROFILE SCREEN */}
+        {/* ---------------------------------------------------- */}
+        {activeTab === 'profile' && (
+          <div className="flex-1 flex flex-col overflow-y-auto lux-scroll relative z-10 p-4">
+            
+            {/* Header & Switcher */}
+            <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-4">
+              <div>
+                <h2 className="text-sm font-bold text-white flex items-center gap-1.5">
+                  <User className="w-4 h-4 text-pink-400" />
+                  <span>پروفایل و حس‌وحال عاشقانه</span>
+                </h2>
+                <p className="text-[10px] text-pink-200/60 mt-0.5">مدیریت آواتار، وضعیت روحی و بیوگرافی مشترک</p>
+              </div>
+
+              {/* Segment Toggle */}
+              <div className="flex p-0.5 rounded-xl bg-white/10 border border-white/10">
+                <button
+                  type="button"
+                  onClick={() => setProfileTab('my')}
+                  className={`px-3 py-1 text-xs rounded-lg transition-all ${profileTab === 'my' ? 'bg-pink-500 text-white font-bold shadow' : 'text-white/60 hover:text-white'}`}
+                >
+                  پروفایل من
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProfileTab('partner')}
+                  className={`px-3 py-1 text-xs rounded-lg transition-all ${profileTab === 'partner' ? 'bg-pink-500 text-white font-bold shadow' : 'text-white/60 hover:text-white'}`}
+                >
+                  عشقم 🌸
+                </button>
+              </div>
+            </div>
+
+            {profileTab === 'my' ? (
+              /* MY PROFILE (EDITABLE) */
+              <form onSubmit={handleSaveProfile} className="space-y-4 pb-6">
+                {/* Avatar Picker */}
+                <div className="flex flex-col items-center justify-center pt-2">
+                  <div className="relative group cursor-pointer" onClick={() => avatarInputRef.current?.click()}>
+                    <div className="absolute -inset-1 rounded-full bg-gradient-to-r from-pink-500 via-rose-500 to-purple-600 opacity-75 blur-[6px] animate-pulse"></div>
+                    <div className="relative w-24 h-24 rounded-full overflow-hidden bg-[#1c122c] border-2 border-pink-400/80 flex items-center justify-center shadow-xl">
+                      {editAvatar ? (
+                        <img src={editAvatar} alt="My Avatar" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-3xl font-bold text-pink-300">
+                          {user === 'alireza' ? 'ع' : 'ف'}
+                        </span>
+                      )}
+                      <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center opacity-80 group-hover:opacity-100 transition-opacity">
+                        <Camera className="w-6 h-6 text-white mb-0.5" />
+                        <span className="text-[9px] text-white/90">تغییر عکس</span>
+                      </div>
+                    </div>
+                  </div>
+                  <input 
+                    ref={avatarInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleAvatarFileChange}
+                  />
+                  <p className="text-[11px] text-pink-300/80 mt-2 font-medium">عکس پروفایل خود را لمس کنید</p>
+                </div>
+
+                {/* Nickname Input */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-white/80 font-medium flex items-center gap-1.5">
+                    <Edit3 className="w-3.5 h-3.5 text-pink-400" />
+                    <span>لقب یا نام شما (برای عشقتان نمایش داده می‌شود):</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={editNickname}
+                    onChange={(e) => setEditNickname(e.target.value)}
+                    placeholder={user === 'alireza' ? 'علیرضا' : 'فاطمه'}
+                    className="w-full py-2.5 px-3.5 rounded-xl bg-white/5 border border-white/10 text-white text-xs focus:outline-none focus:border-pink-500/60 transition-colors"
+                  />
+                </div>
+
+                {/* Mood Selector */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-white/80 font-medium flex items-center gap-1.5">
+                    <Smile className="w-3.5 h-3.5 text-pink-400" />
+                    <span>حس‌وحال و وضعیت الان شما:</span>
+                  </label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {MOOD_OPTIONS.map((item) => (
+                      <button
+                        key={item.emoji}
+                        type="button"
+                        onClick={() => setEditMood(item.emoji)}
+                        className={`p-2 rounded-xl border flex flex-col items-center gap-1 transition-all ${
+                          editMood === item.emoji 
+                            ? 'bg-pink-500/25 border-pink-400 text-white shadow-md shadow-pink-900/30 scale-102 font-bold' 
+                            : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/10'
+                        }`}
+                      >
+                        <span className="text-xl">{item.emoji}</span>
+                        <span className="text-[9px]">{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Romantic Bio */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-white/80 font-medium flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-pink-400" />
+                    <span>جمله دلنشین / بیو عاشقانه شما:</span>
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={editBio}
+                    onChange={(e) => setEditBio(e.target.value)}
+                    placeholder="یک متن عاشقانه بنویسید که در بالای چت همسرتان بدرخشد..."
+                    className="w-full py-2.5 px-3.5 rounded-xl bg-white/5 border border-white/10 text-white text-xs focus:outline-none focus:border-pink-500/60 transition-colors resize-none lux-scroll"
+                  />
+                </div>
+
+                {/* Submit Button */}
+                <button
+                  type="submit"
+                  className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-pink-500 via-rose-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white text-xs font-bold shadow-lg shadow-pink-900/40 transition-all flex items-center justify-center gap-2 active:scale-98"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>ذخیره و ارسال زنده به عشقم ✨❤️</span>
+                </button>
+              </form>
+            ) : (
+              /* PARTNER PROFILE VIEW */
+              <div className="space-y-4 pb-6 animate-fadeIn">
+                <div className="p-5 rounded-3xl glass-panel border border-pink-500/20 text-center relative overflow-hidden shadow-2xl">
+                  {/* Decorative Glow */}
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-pink-500/10 rounded-full blur-2xl pointer-events-none"></div>
+                  
+                  {/* Partner Avatar */}
+                  <div className="relative inline-block mx-auto mb-3">
+                    <div className="absolute -inset-1 rounded-full bg-gradient-to-tr from-rose-500 via-pink-500 to-indigo-500 opacity-80 blur-[6px] animate-pulse"></div>
+                    <div className="relative w-24 h-24 rounded-full overflow-hidden bg-[#1c122c] border-2 border-pink-400/90 flex items-center justify-center shadow-xl">
+                      {partnerProfile.avatar ? (
+                        <img src={partnerProfile.avatar} alt="Partner" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-3xl font-bold text-pink-300">{partnerInitial}</span>
+                      )}
+                    </div>
+                    <span className={`absolute bottom-0 left-1 w-5 h-5 border-2 border-[#120a1f] rounded-full shadow ${partnerOnline ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-500'}`}></span>
+                  </div>
+
+                  {/* Partner Name & Mood */}
+                  <h3 className="text-base font-bold text-white flex items-center justify-center gap-1.5">
+                    <span>{partnerProfile.nickname || partnerName}</span>
+                    <span className="text-lg">{partnerProfile.mood || '🥰'}</span>
+                  </h3>
+
+                  {/* Partner Online Status */}
+                  <div className="mt-1 flex items-center justify-center gap-1.5 text-xs">
+                    {partnerOnline ? (
+                      <span className="text-emerald-400 font-medium flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                        هم‌اکنون آنلاین و در کنارت
+                      </span>
+                    ) : (
+                      <span className="text-white/50 font-light">
+                        {formatLastSeen(partnerLastSeen)}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Partner Bio */}
+                  {partnerProfile.bio ? (
+                    <div className="mt-4 p-3 rounded-2xl bg-white/5 border border-white/10 text-xs text-pink-200/90 italic">
+                      « {partnerProfile.bio} »
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-[11px] text-white/40">هنوز متنی در بیوگرافی نوشته نشده است</p>
+                  )}
+
+                  {/* Quick Action Button */}
+                  <div className="mt-5 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={sendNudge}
+                      className="flex-1 py-2.5 px-3 rounded-xl bg-pink-500/20 hover:bg-pink-500/30 border border-pink-500/30 text-rose-300 text-xs font-semibold transition-all flex items-center justify-center gap-1.5 active:scale-95"
+                    >
+                      <Heart className="w-4 h-4 fill-current" />
+                      <span>ارسال تپش قلب (ویبره)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('chat')}
+                      className="flex-1 py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold transition-all flex items-center justify-center gap-1.5 active:scale-95"
+                    >
+                      <MessageCircle className="w-4 h-4" />
+                      <span>ارسال پیام</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Love Counter Card */}
+                <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                      <Heart className="w-5 h-5 fill-rose-500" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-white">روزهای عاشقی ما</p>
+                      <p className="text-[10px] text-white/50">لحظاتی که قلب‌هامون به هم وصل بوده</p>
+                    </div>
+                  </div>
+                  <div className="text-left font-mono">
+                    <span className="text-lg font-bold text-pink-400">{realDays || 1}</span>
+                    <span className="text-xs text-white/60 mr-1">روز</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ---------------------------------------------------- */}
         {/* BOTTOM NAVIGATION BAR */}
         {/* ---------------------------------------------------- */}
         <div className="relative z-30 bg-black/85 backdrop-blur-2xl border-t border-white/10 px-6 py-2.5 flex items-center justify-around shadow-2xl">
@@ -1737,7 +2115,7 @@ export default function App() {
             className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'memories' ? 'text-pink-400 font-bold scale-105' : 'text-white/40 hover:text-white/80'}`}
           >
             <BookHeart className="w-5 h-5" />
-            <span className="text-[10px]">خاطرات ما</span>
+            <span className="text-[10px]">خاطرات</span>
           </button>
 
           <button 
@@ -1745,7 +2123,15 @@ export default function App() {
             className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'playlist' ? 'text-pink-400 font-bold scale-105' : 'text-white/40 hover:text-white/80'}`}
           >
             <Music className="w-5 h-5" />
-            <span className="text-[10px]">موزیک ما</span>
+            <span className="text-[10px]">موزیک</span>
+          </button>
+
+          <button 
+            onClick={() => setActiveTab('profile')}
+            className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'profile' ? 'text-pink-400 font-bold scale-105' : 'text-white/40 hover:text-white/80'}`}
+          >
+            <User className="w-5 h-5" />
+            <span className="text-[10px]">پروفایل</span>
           </button>
         </div>
 

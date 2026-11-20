@@ -11,13 +11,12 @@ const TOPIC_PLAYLIST = `${ROOM_CHANNEL}/playlist`;
 const TOPIC_DELETE = `${ROOM_CHANNEL}/delete`;
 const TOPIC_SEEN = `${ROOM_CHANNEL}/seen`;
 const TOPIC_PRESENCE = `${ROOM_CHANNEL}/presence`;
+const TOPIC_PROFILE = `${ROOM_CHANNEL}/profile`;
 
-// Standard HTTPS/WSS Port 443 GunDB Cloud Relays
+// High-speed, low-overhead cloud peers
 const GUN_PEERS = [
   'https://gun-manhattan.herokuapp.com/gun',
-  'https://peer.wallie.io/gun',
-  'https://relay.peer.ooo/gun',
-  'https://gunjs.herokuapp.com/gun'
+  'https://relay.peer.ooo/gun'
 ];
 
 let gunInstance = null;
@@ -28,7 +27,8 @@ function getGunRoom() {
     try {
       gunInstance = Gun({
         peers: GUN_PEERS,
-        localStorage: true
+        radisk: false,
+        localStorage: false // Don't block localStorage, IndexedDB is handled in db.js
       });
       gunRoom = gunInstance.get(ROOM_CHANNEL);
     } catch (e) {
@@ -58,67 +58,39 @@ export function initCloudSync({
   onPlaylist, 
   onDeleteMessage, 
   onSeen,
-  onPresence, 
+  onPresence,
+  onProfile, 
   onStatusChange 
 }) {
-  // 1. Initialize Gun Cloud Database
+  // 1. Initial Cloud Database Catch-up (using .once so it doesn't burn CPU in background)
   const room = getGunRoom();
   if (room) {
     if (onStatusChange) onStatusChange(true);
 
-    // Sync historical and new messages from Cloud Database
-    room.get('messages').map().on((jsonStr, id) => {
+    // Load stored profiles on startup
+    room.get('profiles').map().once((jsonStr) => {
+      if (!jsonStr) return;
+      try {
+        const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
+        if (data && onProfile) onProfile(data);
+      } catch (e) {}
+    });
+
+    // Load stored messages once on startup
+    room.get('messages').map().once((jsonStr) => {
       if (!jsonStr) return;
       try {
         const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
         if (data && data.id) {
           if (processedMsgIds.has(data.id)) return;
           processedMsgIds.add(data.id);
-          if (onMessage) onMessage(data);
+          if (onMessage) onMessage({ ...data, isHistorical: true });
         }
-      } catch (e) {
-        console.error('Gun msg parse error:', e);
-      }
-    });
-
-    // Real-time Presence
-    room.get('presence').map().on((jsonStr) => {
-      if (!jsonStr) return;
-      try {
-        const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
-        if (data && onPresence) onPresence(data);
       } catch (e) {}
     });
 
-    // Nudges
-    room.get('nudge').on((jsonStr) => {
-      if (!jsonStr) return;
-      try {
-        const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
-        if (data && onNudge) onNudge(data);
-      } catch (e) {}
-    });
-
-    // Typing status
-    room.get('typing').on((jsonStr) => {
-      if (!jsonStr) return;
-      try {
-        const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
-        if (data && onTyping) onTyping(data);
-      } catch (e) {}
-    });
-
-    // Seen status
-    room.get('seen').on((jsonStr) => {
-      if (!jsonStr) return;
-      try {
-        const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
-        if (data && onSeen) onSeen(data);
-      } catch (e) {}
-    });
-
-    // Memories
-    room.get('memories').map().on((jsonStr) => {
+    // Load memories once on startup
+    room.get('memories').map().once((jsonStr) => {
       if (!jsonStr) return;
       try {
         const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
@@ -130,8 +102,8 @@ export function initCloudSync({
       } catch (e) {}
     });
 
-    // Shared Playlist
-    room.get('playlist').map().on((jsonStr) => {
+    // Load playlist once on startup
+    room.get('playlist').map().once((jsonStr) => {
       if (!jsonStr) return;
       try {
         const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
@@ -142,18 +114,9 @@ export function initCloudSync({
         }
       } catch (e) {}
     });
-
-    // Message Deletions
-    room.get('delete').on((jsonStr) => {
-      if (!jsonStr) return;
-      try {
-        const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
-        if (data && onDeleteMessage) onDeleteMessage(data);
-      } catch (e) {}
-    });
   }
 
-  // 2. High-speed MQTT backup channel
+  // 2. Ultra-Lightweight, 0% CPU MQTT for real-time events
   if (client && client.connected) {
     if (onStatusChange) onStatusChange(true);
     return client;
@@ -164,7 +127,7 @@ export function initCloudSync({
     isConnecting = true;
 
     const brokerUrl = BROKERS[index % BROKERS.length];
-    const clientId = 'duo_' + Math.random().toString(16).substring(2, 10);
+    const clientId = 'two_souls_' + Math.random().toString(16).substring(2, 10);
 
     try {
       if (client) {
@@ -175,13 +138,13 @@ export function initCloudSync({
         clientId,
         clean: true,
         connectTimeout: 8000,
-        reconnectPeriod: 4000,
+        reconnectPeriod: 5000,
         keepalive: 60,
       });
 
       client.on('connect', () => {
         isConnecting = false;
-        console.log(`✨ Connected to Cloud Broker [${brokerUrl}]`);
+        console.log(`✨ Connected to Real-time Broker [${brokerUrl}]`);
         if (onStatusChange) onStatusChange(true);
 
         client.subscribe([
@@ -193,7 +156,8 @@ export function initCloudSync({
           TOPIC_PLAYLIST,
           TOPIC_DELETE,
           TOPIC_SEEN,
-          TOPIC_PRESENCE
+          TOPIC_PRESENCE,
+          TOPIC_PROFILE
         ], (err) => {
           if (err) console.error('Sub error:', err);
         });
@@ -203,9 +167,10 @@ export function initCloudSync({
         try {
           const data = JSON.parse(payload.toString());
           if (topic === TOPIC_MSG && onMessage) {
-            if (data && data.id && !processedMsgIds.has(data.id)) {
+            if (data && data.id) {
+              if (processedMsgIds.has(data.id)) return;
               processedMsgIds.add(data.id);
-              onMessage(data);
+              onMessage({ ...data, isHistorical: false });
             }
           } else if (topic === TOPIC_NUDGE && onNudge) {
             onNudge(data);
@@ -227,6 +192,8 @@ export function initCloudSync({
             onSeen(data);
           } else if (topic === TOPIC_PRESENCE && onPresence) {
             onPresence(data);
+          } else if (topic === TOPIC_PROFILE && onProfile) {
+            onProfile(data);
           }
         } catch (e) {
           console.error('MQTT parse error:', e);
@@ -236,7 +203,7 @@ export function initCloudSync({
       client.on('error', () => {
         isConnecting = false;
         currentBrokerIdx = (currentBrokerIdx + 1) % BROKERS.length;
-        setTimeout(() => connectToBroker(currentBrokerIdx), 4000);
+        setTimeout(() => connectToBroker(currentBrokerIdx), 5000);
       });
 
       client.on('close', () => {
@@ -260,33 +227,27 @@ export function sendCloudMessage(messageObj) {
   if (messageObj && messageObj.id) {
     processedMsgIds.add(messageObj.id);
   }
-  // 1. Store permanently in Cloud Database (Gun)
+  // 1. Store in Cloud Database
   const room = getGunRoom();
   if (room && messageObj && messageObj.id) {
-    room.get('messages').get(messageObj.id).put(JSON.stringify(messageObj));
+    try {
+      room.get('messages').get(messageObj.id).put(JSON.stringify(messageObj));
+    } catch (e) {}
   }
 
-  // 2. Broadcast via MQTT
+  // 2. Broadcast via MQTT (instant <50ms delivery)
   if (client && client.connected) {
     client.publish(TOPIC_MSG, JSON.stringify(messageObj), { qos: 1 });
   }
 }
 
 export function sendCloudNudge(sender) {
-  const room = getGunRoom();
-  if (room) {
-    room.get('nudge').put(JSON.stringify({ sender, timestamp: Date.now() }));
-  }
   if (client && client.connected) {
     client.publish(TOPIC_NUDGE, JSON.stringify({ sender }), { qos: 1 });
   }
 }
 
 export function sendCloudTyping(sender) {
-  const room = getGunRoom();
-  if (room) {
-    room.get('typing').put(JSON.stringify({ sender, timestamp: Date.now() }));
-  }
   if (client && client.connected) {
     client.publish(TOPIC_TYPING, JSON.stringify({ sender }), { qos: 0 });
   }
@@ -298,7 +259,9 @@ export function sendCloudMemory(memoryObj) {
   }
   const room = getGunRoom();
   if (room && memoryObj && memoryObj.id) {
-    room.get('memories').get(memoryObj.id).put(JSON.stringify(memoryObj));
+    try {
+      room.get('memories').get(memoryObj.id).put(JSON.stringify(memoryObj));
+    } catch (e) {}
   }
   if (client && client.connected) {
     client.publish(TOPIC_MEMORY, JSON.stringify(memoryObj), { qos: 1 });
@@ -311,7 +274,9 @@ export function sendCloudPlaylist(trackObj) {
   }
   const room = getGunRoom();
   if (room && trackObj && trackObj.id) {
-    room.get('playlist').get(trackObj.id).put(JSON.stringify(trackObj));
+    try {
+      room.get('playlist').get(trackObj.id).put(JSON.stringify(trackObj));
+    } catch (e) {}
   }
   if (client && client.connected) {
     client.publish(TOPIC_PLAYLIST, JSON.stringify(trackObj), { qos: 1 });
@@ -321,11 +286,10 @@ export function sendCloudPlaylist(trackObj) {
 export function sendCloudDelete(messageIdOrData) {
   const payload = typeof messageIdOrData === 'object' ? messageIdOrData : { id: messageIdOrData };
   const room = getGunRoom();
-  if (room) {
-    if (payload.id) {
+  if (room && payload.id) {
+    try {
       room.get('messages').get(payload.id).put(null);
-    }
-    room.get('delete').put(JSON.stringify(payload));
+    } catch (e) {}
   }
   if (client && client.connected) {
     client.publish(TOPIC_DELETE, JSON.stringify(payload), { qos: 1 });
@@ -333,21 +297,25 @@ export function sendCloudDelete(messageIdOrData) {
 }
 
 export function sendCloudSeen(seenData) {
-  const room = getGunRoom();
-  if (room) {
-    room.get('seen').put(JSON.stringify(seenData));
-  }
   if (client && client.connected) {
     client.publish(TOPIC_SEEN, JSON.stringify(seenData), { qos: 1 });
   }
 }
 
 export function sendCloudPresence(presenceData) {
-  const room = getGunRoom();
-  if (room && presenceData && presenceData.user) {
-    room.get('presence').get(presenceData.user).put(JSON.stringify(presenceData));
-  }
   if (client && client.connected) {
     client.publish(TOPIC_PRESENCE, JSON.stringify(presenceData), { qos: 0 });
+  }
+}
+
+export function sendCloudProfile(profileData) {
+  const room = getGunRoom();
+  if (room && profileData && profileData.user) {
+    try {
+      room.get('profiles').get(profileData.user).put(JSON.stringify(profileData));
+    } catch (e) {}
+  }
+  if (client && client.connected) {
+    client.publish(TOPIC_PROFILE, JSON.stringify(profileData), { qos: 1 });
   }
 }
