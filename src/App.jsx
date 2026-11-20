@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { LocalNotifications } from '@capacitor/local-notifications';
 import { io } from 'socket.io-client';
 import { 
   Heart, 
@@ -238,11 +239,31 @@ export default function App() {
     } catch (e) {}
   };
 
-  const notifyUser = (title, body) => {
+  const notifyUser = async (title, body) => {
     playChime();
     if ('vibrate' in navigator) {
       navigator.vibrate([200, 100, 200]);
     }
+    // 1. Try Native Android Notification via Capacitor (for APK)
+    try {
+      await LocalNotifications.schedule({
+        notifications: [
+          {
+            title: title || 'چت دونفره',
+            body: body || '',
+            id: Math.floor(Math.random() * 1000000),
+            sound: 'beep.wav',
+            vibrate: true,
+            smallIcon: 'ic_launcher'
+          }
+        ]
+      });
+      return;
+    } catch (e) {
+      // Fallback for Web/Browser
+    }
+
+    // 2. Fallback to Web / PWA Notification
     if (typeof window !== 'undefined' && 'Notification' in window) {
       if (Notification.permission === 'granted') {
         try {
@@ -2074,19 +2095,26 @@ export default function App() {
               {/* Notification Permission & Test */}
               <div className="mt-5 pt-4 border-t border-white/10">
                 <button 
-                  onClick={() => {
-                    if ('Notification' in window) {
-                      Notification.requestPermission().then((perm) => {
-                        if (perm === 'granted') {
-                          notifyUser('تست نوتیفیکیشن 🔔', 'سیستم اعلان‌ها با موفقیت فعال شد!');
-                          setNudgeAlert('🔔 نوتیفیکیشن فعال شد!');
-                          setTimeout(() => setNudgeAlert(null), 3000);
-                        } else {
-                          alert('دسترسی نوتیفیکیشن در مرورگر داده نشد. لطفاً در تنظیمات مرورگر اجازه دهید.');
-                        }
-                      });
-                    } else {
-                      alert('مرورگر شما از نوتیفیکیشن وب پشتیبانی نمی‌کند.');
+                  onClick={async () => {
+                    let granted = false;
+                    try {
+                      const res = await LocalNotifications.requestPermissions();
+                      if (res.display === 'granted') granted = true;
+                    } catch (e) {}
+
+                    if (!granted && typeof window !== 'undefined' && 'Notification' in window) {
+                      try {
+                        const perm = await Notification.requestPermission();
+                        if (perm === 'granted') granted = true;
+                      } catch (e) {}
+                    }
+
+                    try {
+                      await notifyUser('چت دونفره ❤️', 'سیستم اعلان‌ها و نوتیفیکیشن با موفقیت فعال شد!');
+                      setNudgeAlert('🔔 نوتیفیکیشن فعال شد!');
+                      setTimeout(() => setNudgeAlert(null), 3000);
+                    } catch (err) {
+                      alert('لطفاً در تنظیمات گوشی دسترسی اعلان (Notification) را به برنامه بدهید.');
                     }
                   }}
                   className="w-full py-2.5 px-4 rounded-2xl bg-pink-500/10 hover:bg-pink-500/20 border border-pink-500/30 text-pink-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all mb-2"
