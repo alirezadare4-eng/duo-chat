@@ -43,7 +43,13 @@ import {
   HeartHandshake,
   HelpCircle,
   Gift,
-  ListChecks
+  ListChecks,
+  Video,
+  VideoOff,
+  MicOff,
+  PhoneCall,
+  PhoneOff,
+  ArrowDown
 } from 'lucide-react';
 import { 
   initCloudSync, 
@@ -56,7 +62,8 @@ import {
   sendCloudSeen,
   sendCloudPresence,
   sendCloudProfile,
-  sendCloudTogetherAction
+  sendCloudTogetherAction,
+  sendCloudCall
 } from './cloudSync';
 import { compressImage, generateMessageId, formatSeconds } from './utils';
 import { getAllFromStore, saveToStore, deleteFromStore, clearStore } from './db';
@@ -267,6 +274,21 @@ export default function App() {
   const textInputRef = useRef(null);
 
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
+
+  // Call & WebRTC State
+  const [activeCall, setActiveCall] = useState(null); // { isOpen, isIncoming, isVideo, status: 'ringing'|'connected' }
+  const [isMicMuted, setIsMicMuted] = useState(false);
+  const [isCamOff, setIsCamOff] = useState(false);
+  const [callDuration, setCallDuration] = useState(0);
+
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const localStreamRef = useRef(null);
+  const callTimerRef = useRef(null);
+  const ringtoneOscRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const fileInputRef = useRef(null);
@@ -730,9 +752,13 @@ export default function App() {
           }
 
           if (!msg.isHistorical) {
-            const partnerDisplay = user === 'alireza' ? 'فاطمه من 🌸' : 'علیرضای من 👨‍💻';
-            const previewText = msg.type === 'text' ? msg.text : msg.type === 'audio' ? 'یک پیام صوتی فرستاد 🎙️' : 'یک عکس فرستاد 📷';
-            notifyUser(partnerDisplay, previewText);
+            if (!isChatActive) {
+              const partnerDisplay = user === 'alireza' ? 'فاطمه من 🌸' : 'علیرضای من 👨‍💻';
+              const previewText = msg.type === 'text' ? msg.text : msg.type === 'audio' ? 'یک پیام صوتی فرستاد 🎙️' : 'یک عکس فرستاد 📷';
+              notifyUser(partnerDisplay, previewText);
+            } else {
+              playChime();
+            }
           }
         }
       },
@@ -925,6 +951,9 @@ export default function App() {
           setNudgeAlert(`یک کپسول زمان جدید با تاریخ قفل ایجاد شد! ⏳🔒`);
           setTimeout(() => setNudgeAlert(null), 3500);
         }
+      },
+      onCall: (data) => {
+        handleCloudCall(data);
       }
     });
 
@@ -1092,6 +1121,301 @@ export default function App() {
       window.removeEventListener('beforeunload', handleUnload);
     };
   }, [user, activeTab]);
+
+  // ----------------------------------------------------
+  // Auto-scroll to latest message
+  // ----------------------------------------------------
+  const scrollToBottom = (behavior = 'smooth') => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior, block: 'end' });
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'chat') {
+      const container = messagesContainerRef.current;
+      if (container) {
+        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 280;
+        const lastMsg = messages[messages.length - 1];
+        const isMyMsg = lastMsg && lastMsg.sender === user;
+        if (isNearBottom || isMyMsg) {
+          scrollToBottom('smooth');
+          setShowScrollBottom(false);
+        } else {
+          setShowScrollBottom(true);
+        }
+      } else {
+        scrollToBottom('auto');
+      }
+    }
+  }, [messages, activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'chat') {
+      setTimeout(() => scrollToBottom('auto'), 100);
+    }
+  }, [activeTab]);
+
+  const handleMessageScroll = (e) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 180;
+    setShowScrollBottom(!isNearBottom);
+  };
+
+  // ----------------------------------------------------
+  // WebRTC 1-on-1 Voice & Video Calling
+  // ----------------------------------------------------
+  const startRingtone = (isIncoming = false) => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      let step = 0;
+      const interval = setInterval(() => {
+        step++;
+        const osc1 = ctx.createOscillator();
+        const osc2 = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc1.type = 'sine';
+        osc2.type = 'sine';
+        osc1.frequency.setValueAtTime(isIncoming ? 440 : 400, ctx.currentTime);
+        osc2.frequency.setValueAtTime(isIncoming ? 480 : 450, ctx.currentTime);
+        gain.gain.setValueAtTime(0.08, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.2);
+        osc1.connect(gain);
+        osc2.connect(gain);
+        gain.connect(ctx.destination);
+        osc1.start();
+        osc2.start();
+        osc1.stop(ctx.currentTime + 1.2);
+        if (isIncoming && navigator.vibrate) {
+          try { navigator.vibrate([300, 200, 300]); } catch(e) {}
+        }
+      }, 2500);
+      ringtoneOscRef.current = { interval, ctx };
+    } catch (e) {}
+  };
+
+  const stopRingtone = () => {
+    if (ringtoneOscRef.current) {
+      clearInterval(ringtoneOscRef.current.interval);
+      try { ringtoneOscRef.current.ctx.close(); } catch (e) {}
+      ringtoneOscRef.current = null;
+    }
+  };
+
+  const rtcConfig = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+  };
+
+  const createPeer = () => {
+    if (peerConnectionRef.current) {
+      try { peerConnectionRef.current.close(); } catch(e) {}
+    }
+    const pc = new RTCPeerConnection(rtcConfig);
+    peerConnectionRef.current = pc;
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendCloudCall({
+          type: 'webrtc-ice',
+          sender: user,
+          candidate: event.candidate
+        });
+      }
+    };
+
+    pc.ontrack = (event) => {
+      if (remoteVideoRef.current && event.streams && event.streams[0]) {
+        remoteVideoRef.current.srcObject = event.streams[0];
+      }
+    };
+
+    return pc;
+  };
+
+  const initiateCall = async (isVideo = false) => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: isVideo ? { facingMode: 'user' } : false
+      });
+      localStreamRef.current = stream;
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+    } catch (err) {
+      alert('لطفاً دسترسی به میکروفون/دوربین را در مرورگر یا گوشی تأیید کنید.');
+      return;
+    }
+
+    setActiveCall({
+      isOpen: true,
+      isIncoming: false,
+      isVideo,
+      status: 'ringing'
+    });
+    startRingtone(false);
+
+    sendCloudCall({
+      type: 'call-request',
+      sender: user,
+      isVideo
+    });
+  };
+
+  const endCall = (notifyPartner = true) => {
+    stopRingtone();
+    if (callTimerRef.current) clearInterval(callTimerRef.current);
+    if (localStreamRef.current) {
+      try {
+        localStreamRef.current.getTracks().forEach((t) => t.stop());
+      } catch (e) {}
+      localStreamRef.current = null;
+    }
+    if (peerConnectionRef.current) {
+      try { peerConnectionRef.current.close(); } catch(e) {}
+      peerConnectionRef.current = null;
+    }
+    if (notifyPartner) {
+      sendCloudCall({ type: 'call-end', sender: user });
+    }
+    setActiveCall(null);
+    setCallDuration(0);
+    setIsMicMuted(false);
+    setIsCamOff(false);
+  };
+
+  const acceptIncomingCall = async () => {
+    stopRingtone();
+    if (!activeCall) return;
+    const isVideo = activeCall.isVideo;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: isVideo ? { facingMode: 'user' } : false
+      });
+      localStreamRef.current = stream;
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+
+      const pc = createPeer();
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+      setActiveCall((prev) => ({ ...prev, status: 'connected' }));
+      setCallDuration(0);
+      callTimerRef.current = setInterval(() => setCallDuration((s) => s + 1), 1000);
+
+      sendCloudCall({
+        type: 'call-accepted',
+        sender: user,
+        isVideo
+      });
+    } catch (err) {
+      alert('دسترسی به دوربین/میکروفون داده نشد!');
+      endCall(true);
+    }
+  };
+
+  const rejectIncomingCall = () => {
+    stopRingtone();
+    sendCloudCall({ type: 'call-rejected', sender: user });
+    setActiveCall(null);
+  };
+
+  const handleCloudCall = async (data) => {
+    if (!data || data.sender === user) return;
+
+    if (data.type === 'call-request') {
+      setActiveCall({
+        isOpen: true,
+        isIncoming: true,
+        isVideo: !!data.isVideo,
+        status: 'ringing'
+      });
+      startRingtone(true);
+    } else if (data.type === 'call-accepted') {
+      stopRingtone();
+      setActiveCall((prev) => prev ? { ...prev, status: 'connected' } : null);
+      setCallDuration(0);
+      callTimerRef.current = setInterval(() => setCallDuration((s) => s + 1), 1000);
+
+      const pc = createPeer();
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((track) => pc.addTrack(track, localStreamRef.current));
+      }
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        sendCloudCall({
+          type: 'webrtc-offer',
+          sender: user,
+          sdp: offer
+        });
+      } catch (e) {
+        console.error('Error creating offer:', e);
+      }
+    } else if (data.type === 'webrtc-offer') {
+      const pc = peerConnectionRef.current || createPeer();
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sendCloudCall({
+          type: 'webrtc-answer',
+          sender: user,
+          sdp: answer
+        });
+      } catch (e) {
+        console.error('Error creating answer:', e);
+      }
+    } else if (data.type === 'webrtc-answer') {
+      if (peerConnectionRef.current) {
+        try {
+          await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        } catch (e) {
+          console.error('Error setting remote desc:', e);
+        }
+      }
+    } else if (data.type === 'webrtc-ice') {
+      if (peerConnectionRef.current && data.candidate) {
+        try {
+          await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
+        } catch (e) {}
+      }
+    } else if (data.type === 'call-rejected') {
+      stopRingtone();
+      alert(`${partnerName} تماس را رد کرد.`);
+      endCall(false);
+    } else if (data.type === 'call-end') {
+      endCall(false);
+    }
+  };
+
+  const toggleMic = () => {
+    if (localStreamRef.current) {
+      const audioTrack = localStreamRef.current.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        setIsMicMuted(!audioTrack.enabled);
+      }
+    }
+  };
+
+  const toggleCam = () => {
+    if (localStreamRef.current) {
+      const videoTrack = localStreamRef.current.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        setIsCamOff(!videoTrack.enabled);
+      }
+    }
+  };
 
   // Long-press detection for touch devices
   const handleMessageTouchStart = (msg) => {
@@ -1650,6 +1974,22 @@ export default function App() {
 
               <div className="flex items-center gap-1.5">
                 <button 
+                  onClick={() => initiateCall(false)}
+                  className="p-2.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 transition-all active:scale-90"
+                  title="تماس صوتی"
+                >
+                  <Phone className="w-4 h-4" />
+                </button>
+
+                <button 
+                  onClick={() => initiateCall(true)}
+                  className="p-2.5 rounded-xl bg-pink-500/15 hover:bg-pink-500/25 border border-pink-500/30 text-pink-400 transition-all active:scale-90"
+                  title="تماس تصویری"
+                >
+                  <Video className="w-4 h-4" />
+                </button>
+
+                <button 
                   onClick={() => {
                     setProfileTab('my');
                     setActiveTab('profile');
@@ -1679,7 +2019,11 @@ export default function App() {
             </div>
 
             {/* Message Stream */}
-            <div className="flex-1 min-h-0 px-4 py-3 overflow-y-auto space-y-3 lux-scroll flex flex-col">
+            <div 
+              ref={messagesContainerRef}
+              onScroll={handleMessageScroll}
+              className="flex-1 min-h-0 px-4 py-3 overflow-y-auto space-y-3 lux-scroll flex flex-col relative"
+            >
               {messages.length === 0 ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-white/50 space-y-3">
                   <div className="w-14 h-14 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-2xl animate-pulse">
@@ -1694,12 +2038,13 @@ export default function App() {
                 messages.map((m) => {
                   const isMe = m.sender === user;
                   const isAudioPlaying = activeAudioId === m.id;
+                  const isRecent = !m.isHistorical && (Date.now() - (m.timestamp || 0) < 5000);
 
                   return (
                     <div 
                       key={m.id} 
                       id={`msg-${m.id}`}
-                      className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1 transition-all duration-300 animate-msg-pop ${highlightedMsgId === m.id ? 'scale-102 ring-2 ring-rose-400 rounded-3xl p-1 bg-rose-500/15' : ''}`}
+                      className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1 ${isRecent ? 'animate-msg-pop' : ''} ${highlightedMsgId === m.id ? 'scale-102 ring-2 ring-rose-400 rounded-3xl p-1 bg-rose-500/15' : ''}`}
                     >
                       <div 
                         onDoubleClick={() => handleDoubleTapMessage(m.id)}
@@ -1859,6 +2204,18 @@ export default function App() {
                 })
               )}
               <div ref={messagesEndRef} />
+
+              {showScrollBottom && (
+                <div className="sticky bottom-2 mx-auto z-20 pointer-events-auto">
+                  <button 
+                    onClick={() => scrollToBottom('smooth')}
+                    className="px-3.5 py-1.5 rounded-full bg-gradient-to-r from-pink-500 to-rose-500 text-white text-xs font-medium shadow-lg shadow-pink-500/30 flex items-center gap-1.5 active:scale-95 transition-all animate-bounce"
+                  >
+                    <ArrowDown className="w-3.5 h-3.5" />
+                    <span>پیام‌های جدید 👇</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Input & Voice Deck */}
@@ -3305,6 +3662,154 @@ export default function App() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ================= 1-ON-1 CALL OVERLAY ================= */}
+        {activeCall && (
+          <div className="fixed inset-0 z-[100] bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-between p-6 animate-fadeIn text-white select-none">
+            
+            {/* Top Bar / Status */}
+            <div className="w-full max-w-sm flex flex-col items-center pt-8 space-y-2">
+              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 text-xs text-pink-300">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                <span>{activeCall.isVideo ? 'تماس تصویری دونفره 📹' : 'تماس صوتی اختصاصی 🎙️'}</span>
+              </div>
+              <h2 className="text-xl font-bold tracking-tight text-white mt-1">
+                {partnerProfile.nickname || partnerName}
+              </h2>
+              <p className="text-xs text-white/60">
+                {activeCall.status === 'connected' ? (
+                  <span className="font-mono text-emerald-400 font-bold">{formatSeconds(callDuration)}</span>
+                ) : activeCall.isIncoming ? (
+                  'در حال تماس با شما... 🌸'
+                ) : (
+                  'در حال برقراری تماس... 📞'
+                )}
+              </p>
+            </div>
+
+            {/* Middle: Video Screens OR Romantic Avatar */}
+            <div className="relative flex-1 w-full max-w-md my-4 flex items-center justify-center overflow-hidden rounded-3xl bg-black/40 border border-white/10 shadow-2xl">
+              {activeCall.isVideo && activeCall.status === 'connected' ? (
+                <>
+                  {/* Remote Full Video */}
+                  <video 
+                    ref={remoteVideoRef} 
+                    autoPlay 
+                    playsInline 
+                    className="w-full h-full object-cover rounded-3xl"
+                  />
+                  {/* Local PiP Video */}
+                  <div className="absolute bottom-4 left-4 w-28 h-40 rounded-2xl overflow-hidden border-2 border-pink-400 shadow-xl bg-black/80 z-20">
+                    <video 
+                      ref={localVideoRef} 
+                      autoPlay 
+                      playsInline 
+                      muted 
+                      className={`w-full h-full object-cover ${isCamOff ? 'hidden' : ''}`}
+                    />
+                    {isCamOff && (
+                      <div className="w-full h-full flex flex-col items-center justify-center text-white/50 text-[10px]">
+                        <VideoOff className="w-5 h-5 mb-1" />
+                        <span>دوربین خاموش</span>
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                /* Avatar with Pulsing Aura */
+                <div className="flex flex-col items-center space-y-6">
+                  <div className="relative">
+                    <div className="absolute -inset-4 rounded-full bg-gradient-to-tr from-pink-500 via-rose-500 to-purple-600 opacity-60 blur-xl animate-pulse"></div>
+                    <div className="relative w-32 h-32 rounded-full overflow-hidden border-4 border-white/30 shadow-2xl bg-gradient-to-br from-pink-500 to-rose-600 flex items-center justify-center text-5xl font-bold text-white">
+                      {partnerProfile.avatar ? (
+                        <img src={partnerProfile.avatar} alt="Avatar" className="w-full h-full object-cover" />
+                      ) : (
+                        partnerInitial
+                      )}
+                    </div>
+                  </div>
+                  
+                  {activeCall.status === 'connected' && (
+                    <div className="flex items-center gap-1.5 px-4 py-2 rounded-2xl bg-white/10 backdrop-blur-md">
+                      <Heart className="w-4 h-4 fill-rose-500 text-rose-500 heart-pulse" />
+                      <span className="text-xs text-pink-200">صدای آرامش‌بخش تو...</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Bottom Controls */}
+            <div className="w-full max-w-sm flex items-center justify-center gap-6 pb-6">
+              {activeCall.status === 'ringing' && activeCall.isIncoming ? (
+                /* Incoming Call: Accept (Green) or Reject (Red) */
+                <div className="flex items-center justify-around w-full px-4">
+                  <button 
+                    onClick={rejectIncomingCall}
+                    className="w-16 h-16 rounded-full bg-rose-600 hover:bg-rose-700 text-white flex items-center justify-center shadow-lg shadow-rose-600/40 active:scale-90 transition-all"
+                    title="رد تماس"
+                  >
+                    <PhoneOff className="w-7 h-7" />
+                  </button>
+
+                  <button 
+                    onClick={acceptIncomingCall}
+                    className="w-16 h-16 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center shadow-lg shadow-emerald-500/40 animate-bounce active:scale-90 transition-all"
+                    title="پاسخ به تماس"
+                  >
+                    <PhoneCall className="w-7 h-7" />
+                  </button>
+                </div>
+              ) : (
+                /* Connected or Outgoing Call Controls */
+                <div className="flex items-center justify-center gap-4 w-full">
+                  {/* Mute Mic */}
+                  <button 
+                    onClick={toggleMic}
+                    className={`w-12 h-12 rounded-full ${isMicMuted ? 'bg-rose-500/30 text-rose-400 border border-rose-500/50' : 'bg-white/10 text-white hover:bg-white/20'} flex items-center justify-center active:scale-95 transition-all`}
+                    title={isMicMuted ? 'وصل میکروفون' : 'قطع میکروفون'}
+                  >
+                    {isMicMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                  </button>
+
+                  {/* Toggle Video (if video call) */}
+                  {activeCall.isVideo && (
+                    <button 
+                      onClick={toggleCam}
+                      className={`w-12 h-12 rounded-full ${isCamOff ? 'bg-rose-500/30 text-rose-400 border border-rose-500/50' : 'bg-white/10 text-white hover:bg-white/20'} flex items-center justify-center active:scale-95 transition-all`}
+                      title={isCamOff ? 'روشن کردن دوربین' : 'خاموش کردن دوربین'}
+                    >
+                      {isCamOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
+                    </button>
+                  )}
+
+                  {/* Send In-Call Heart Spark */}
+                  <button 
+                    onClick={() => {
+                      sendNudge();
+                      setShowHeartBurst(true);
+                      setTimeout(() => setShowHeartBurst(false), 1200);
+                    }}
+                    className="w-12 h-12 rounded-full bg-pink-500/20 hover:bg-pink-500/30 border border-pink-500/40 text-pink-400 flex items-center justify-center active:scale-90 transition-all"
+                    title="ارسال تپش قلب حین مکالمه 💖"
+                  >
+                    <Heart className="w-6 h-6 fill-current animate-pulse" />
+                  </button>
+
+                  {/* End Call (Red) */}
+                  <button 
+                    onClick={() => endCall(true)}
+                    className="w-14 h-14 rounded-full bg-rose-600 hover:bg-rose-700 text-white flex items-center justify-center shadow-lg shadow-rose-600/40 active:scale-90 transition-all mr-2"
+                    title="قطع تماس"
+                  >
+                    <PhoneOff className="w-6 h-6" />
+                  </button>
+                </div>
+              )}
+            </div>
+
           </div>
         )}
 
