@@ -49,7 +49,13 @@ import {
   MicOff,
   PhoneCall,
   PhoneOff,
-  ArrowDown
+  ArrowDown,
+  Search,
+  Pin,
+  Download,
+  FileText,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
 import { 
   initCloudSync, 
@@ -282,6 +288,28 @@ export default function App() {
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isCamOff, setIsCamOff] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
+
+  // Search State
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentSearchIdx, setCurrentSearchIdx] = useState(0);
+
+  // Pin Message State
+  const [pinnedMsg, setPinnedMsg] = useState(() => {
+    try {
+      const s = localStorage.getItem('duo_pinned_msg');
+      return s ? JSON.parse(s) : null;
+    } catch(e) { return null; }
+  });
+
+  // Shared Media Gallery Modal
+  const [showSharedMedia, setShowSharedMedia] = useState(false);
+  const [sharedMediaTab, setSharedMediaTab] = useState('photos'); // 'photos' | 'voices' | 'pinned'
+  const [activeGalleryPhoto, setActiveGalleryPhoto] = useState(null);
+
+  // HD Image Quality
+  const [sendHD, setSendHD] = useState(false);
+  const pendingFileRef = useRef(null);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -950,6 +978,18 @@ export default function App() {
           playChime();
           setNudgeAlert(`یک کپسول زمان جدید با تاریخ قفل ایجاد شد! ⏳🔒`);
           setTimeout(() => setNudgeAlert(null), 3500);
+        } else if (action.type === 'pin_message') {
+          setPinnedMsg(action.msg);
+          if (action.msg) {
+            localStorage.setItem('duo_pinned_msg', JSON.stringify(action.msg));
+            if (action.sender !== user) {
+              playChime();
+              setNudgeAlert('یک پیام در بالای چت سنجاق شد 📌');
+              setTimeout(() => setNudgeAlert(null), 3000);
+            }
+          } else {
+            localStorage.removeItem('duo_pinned_msg');
+          }
         }
       },
       onCall: (data) => {
@@ -1470,6 +1510,41 @@ export default function App() {
     }
   };
 
+  const handlePinMessage = (msg) => {
+    setPinnedMsg(msg);
+    localStorage.setItem('duo_pinned_msg', JSON.stringify(msg));
+    sendCloudTogetherAction({ type: 'pin_message', msg, sender: user });
+    setNudgeAlert('پیام در بالای صفحه سنجاق شد 📌');
+    setTimeout(() => setNudgeAlert(null), 2500);
+    setSelectedMsgForMenu(null);
+  };
+
+  const handleUnpinMessage = () => {
+    setPinnedMsg(null);
+    localStorage.removeItem('duo_pinned_msg');
+    sendCloudTogetherAction({ type: 'pin_message', msg: null, sender: user });
+    setNudgeAlert('پیام سنجاق‌شده برداشته شد');
+    setTimeout(() => setNudgeAlert(null), 2000);
+  };
+
+  const searchResults = searchQuery.trim()
+    ? messages.filter((m) => m.type === 'text' && m.text && m.text.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+    : [];
+
+  const handleNextSearch = () => {
+    if (searchResults.length === 0) return;
+    const nextIdx = (currentSearchIdx + 1) % searchResults.length;
+    setCurrentSearchIdx(nextIdx);
+    scrollToMessage(searchResults[nextIdx].id);
+  };
+
+  const handlePrevSearch = () => {
+    if (searchResults.length === 0) return;
+    const prevIdx = (currentSearchIdx - 1 + searchResults.length) % searchResults.length;
+    setCurrentSearchIdx(prevIdx);
+    scrollToMessage(searchResults[prevIdx].id);
+  };
+
   const sendNudge = () => {
     setNudgeAlert(`نبض دلتنگی به گوشی ${partnerName} ارسال شد! 💓`);
     setShowHeartBurst(true);
@@ -1535,6 +1610,8 @@ export default function App() {
   const handleImageSelect = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    pendingFileRef.current = file;
+    setSendHD(false);
     try {
       const compressedBase64 = await compressImage(file, 1000, 0.72);
       setPendingImage(compressedBase64);
@@ -1543,6 +1620,21 @@ export default function App() {
       alert('خطا در بارگذاری تصویر.');
     }
     e.target.value = '';
+  };
+
+  const handleToggleHD = async () => {
+    if (!pendingFileRef.current) return;
+    const nextHD = !sendHD;
+    setSendHD(nextHD);
+    try {
+      if (nextHD) {
+        const hdBase64 = await compressImage(pendingFileRef.current, 2500, 0.95);
+        setPendingImage(hdBase64);
+      } else {
+        const stdBase64 = await compressImage(pendingFileRef.current, 1000, 0.72);
+        setPendingImage(stdBase64);
+      }
+    } catch (e) {}
   };
 
   // Send Photo with selected timer
@@ -1974,6 +2066,22 @@ export default function App() {
 
               <div className="flex items-center gap-1.5">
                 <button 
+                  onClick={() => setIsSearching(!isSearching)}
+                  className={`p-2.5 rounded-xl ${isSearching ? 'bg-pink-500 text-white' : 'bg-white/5 hover:bg-white/10 text-white/70 hover:text-white'} border border-white/10 transition-all active:scale-95`}
+                  title="جستجو در چت"
+                >
+                  <Search className="w-4 h-4" />
+                </button>
+
+                <button 
+                  onClick={() => setShowSharedMedia(true)}
+                  className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 hover:text-white transition-all active:scale-95"
+                  title="رسانه‌ها و فایل‌های مشترک"
+                >
+                  <ImageIcon className="w-4 h-4 text-purple-300" />
+                </button>
+
+                <button 
                   onClick={() => initiateCall(false)}
                   className="p-2.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 transition-all active:scale-90"
                   title="تماس صوتی"
@@ -2017,6 +2125,77 @@ export default function App() {
                 </button>
               </div>
             </div>
+
+            {/* In-chat Search Bar */}
+            {isSearching && (
+              <div className="mx-3 mt-1 px-3 py-2 bg-white/10 backdrop-blur-xl border border-white/15 rounded-2xl flex items-center gap-2 animate-fadeIn z-30">
+                <Search className="w-4 h-4 text-pink-400 shrink-0" />
+                <input 
+                  type="text" 
+                  placeholder="جستجو در متن پیام‌ها..."
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setCurrentSearchIdx(0);
+                  }}
+                  className="flex-1 bg-transparent border-none text-xs text-white placeholder-white/40 focus:outline-none text-right font-sans"
+                  autoFocus
+                />
+                {searchResults.length > 0 && (
+                  <div className="flex items-center gap-1 text-[11px] text-pink-300 font-mono">
+                    <span>{currentSearchIdx + 1}/{searchResults.length}</span>
+                    <button onClick={handlePrevSearch} className="p-1 hover:bg-white/10 rounded-lg" title="قبلی">
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button onClick={handleNextSearch} className="p-1 hover:bg-white/10 rounded-lg" title="بعدی">
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+                {searchQuery && searchResults.length === 0 && (
+                  <span className="text-[10px] text-white/40">یافت نشد</span>
+                )}
+                <button 
+                  onClick={() => {
+                    setIsSearching(false);
+                    setSearchQuery('');
+                  }}
+                  className="p-1 rounded-lg hover:bg-white/10 text-white/60"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Pinned Message Bar */}
+            {pinnedMsg && !isSearching && (
+              <div 
+                onClick={() => scrollToMessage(pinnedMsg.id)}
+                className="mx-3 mt-1 px-3 py-1.5 rounded-2xl bg-white/10 hover:bg-white/15 border-r-4 border-pink-500 backdrop-blur-md flex items-center justify-between cursor-pointer transition-colors z-20"
+              >
+                <div className="flex items-center gap-2 overflow-hidden">
+                  <Pin className="w-3.5 h-3.5 text-pink-400 shrink-0" />
+                  <div className="text-right truncate">
+                    <span className="text-[10px] text-pink-300 font-bold block">
+                      پیام سنجاق‌شده ({pinnedMsg.sender === user ? 'شما' : partnerName})
+                    </span>
+                    <span className="text-[11px] text-white/80 truncate block">
+                      {pinnedMsg.type === 'text' ? pinnedMsg.text : pinnedMsg.type === 'audio' ? 'پیام صوتی 🎙️' : 'تصویر 📷'}
+                    </span>
+                  </div>
+                </div>
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleUnpinMessage();
+                  }}
+                  className="p-1 text-white/40 hover:text-white rounded-lg"
+                  title="برداشتن سنجاق"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
 
             {/* Message Stream */}
             <div 
@@ -3124,6 +3303,24 @@ export default function App() {
                 <img src={pendingImage} alt="پیش‌نمایش" className="max-h-48 w-full object-contain" />
               </div>
 
+              {/* HD Quality Toggle */}
+              <div className="mb-3.5 flex items-center justify-between p-3 rounded-2xl bg-white/5 border border-white/10">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-amber-400" />
+                  <div className="text-right">
+                    <span className="text-xs font-bold text-white block">کیفیت اصلی و شفاف (HD)</span>
+                    <span className="text-[10px] text-white/50 block">حفظ وضوح واقعی عکس بدون افت کیفیت</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleToggleHD}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${sendHD ? 'bg-amber-400 text-slate-900 shadow-md shadow-amber-400/30' : 'bg-white/10 text-white/70'}`}
+                >
+                  {sendHD ? 'فعال (HD) ✨' : 'عادی'}
+                </button>
+              </div>
+
               {/* Timer Options Grid */}
               <div>
                 <label className="text-[11px] text-white/70 block mb-2">تایمر پاک شدن خودکار عکس:</label>
@@ -3570,6 +3767,21 @@ export default function App() {
 
               {!showDeleteConfirm ? (
                 <div className="space-y-2">
+                  {/* Pin Action */}
+                  <button
+                    type="button"
+                    onClick={() => handlePinMessage(selectedMsgForMenu)}
+                    className="w-full py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/15 flex items-center gap-3 text-white text-xs font-medium transition-all active:scale-98"
+                  >
+                    <div className="w-8 h-8 rounded-xl bg-pink-500/20 text-pink-400 flex items-center justify-center shrink-0">
+                      <Pin className="w-4 h-4" />
+                    </div>
+                    <div className="text-right flex-1">
+                      <p className="font-semibold text-white">سنجاق کردن پیام (Pin) 📌</p>
+                      <p className="text-[10px] text-white/50">نمایش پیام در بالای چت برای هر دو نفر</p>
+                    </div>
+                  </button>
+
                   {/* Reply Action */}
                   <button
                     type="button"
@@ -3661,6 +3873,179 @@ export default function App() {
                   </button>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* ================= SHARED MEDIA GALLERY MODAL ================= */}
+        {showSharedMedia && (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xl flex flex-col justify-end animate-fadeIn">
+            <div className="bg-[#120a1f] border-t border-white/20 rounded-t-[36px] p-5 h-[85%] flex flex-col shadow-2xl">
+              
+              {/* Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-white/10 shrink-0">
+                <div className="flex items-center gap-2">
+                  <ImageIcon className="w-5 h-5 text-pink-400" />
+                  <h3 className="font-bold text-sm text-white">رسانه‌ها و فایل‌های مشترک 📁</h3>
+                </div>
+                <button 
+                  onClick={() => setShowSharedMedia(false)}
+                  className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Segmented Tabs (Photos, Voices, Pinned) */}
+              <div className="flex p-1 rounded-2xl bg-white/5 border border-white/10 my-3 shrink-0">
+                <button
+                  onClick={() => setSharedMediaTab('photos')}
+                  className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${sharedMediaTab === 'photos' ? 'bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md' : 'text-white/60 hover:text-white'}`}
+                >
+                  عکس‌ها 📷 ({messages.filter(m => m.type === 'image' || m.type === 'timed_image').length})
+                </button>
+                <button
+                  onClick={() => setSharedMediaTab('voices')}
+                  className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${sharedMediaTab === 'voices' ? 'bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md' : 'text-white/60 hover:text-white'}`}
+                >
+                  صداها 🎙️ ({messages.filter(m => m.type === 'audio').length})
+                </button>
+                <button
+                  onClick={() => setSharedMediaTab('pinned')}
+                  className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${sharedMediaTab === 'pinned' ? 'bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md' : 'text-white/60 hover:text-white'}`}
+                >
+                  سنجاق‌شده 📌
+                </button>
+              </div>
+
+              {/* Tab Content */}
+              <div className="flex-1 overflow-y-auto lux-scroll p-1">
+                {sharedMediaTab === 'photos' && (
+                  <div className="grid grid-cols-3 gap-2">
+                    {messages.filter(m => m.type === 'image' || (m.type === 'timed_image' && !m.expired)).map((imgMsg) => (
+                      <div 
+                        key={imgMsg.id}
+                        onClick={() => setActiveGalleryPhoto(imgMsg)}
+                        className="aspect-square rounded-2xl overflow-hidden border border-white/10 bg-black/40 cursor-pointer hover:opacity-90 active:scale-95 transition-all relative group"
+                      >
+                        <img src={imgMsg.image || imgMsg.text} alt="Shared" className="w-full h-full object-cover" />
+                        <span className="absolute bottom-1 right-1 text-[9px] bg-black/60 px-1.5 py-0.5 rounded text-white/80">
+                          {imgMsg.time}
+                        </span>
+                      </div>
+                    ))}
+                    {messages.filter(m => m.type === 'image').length === 0 && (
+                      <div className="col-span-3 text-center py-12 text-white/40 text-xs">
+                        هنوز هیچ عکسی ارسال نشده است
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {sharedMediaTab === 'voices' && (
+                  <div className="space-y-2">
+                    {messages.filter(m => m.type === 'audio').map((audioMsg) => (
+                      <div 
+                        key={audioMsg.id}
+                        onClick={() => playAudio(audioMsg.id, audioMsg.audio || audioMsg.text)}
+                        className="p-3 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 flex items-center justify-between cursor-pointer transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-pink-500/20 text-pink-400 flex items-center justify-center">
+                            {activeAudioId === audioMsg.id ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+                          </div>
+                          <div className="text-right">
+                            <span className="text-xs font-semibold text-white block">
+                              ویس {audioMsg.sender === user ? 'شما' : partnerName}
+                            </span>
+                            <span className="text-[10px] text-white/40 block">{audioMsg.time}</span>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            scrollToMessage(audioMsg.id);
+                            setShowSharedMedia(false);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white/10 text-[10px] text-pink-300 hover:bg-white/20"
+                        >
+                          مشاهده در چت
+                        </button>
+                      </div>
+                    ))}
+                    {messages.filter(m => m.type === 'audio').length === 0 && (
+                      <div className="text-center py-12 text-white/40 text-xs">
+                        هنوز هیچ پیام صوتی ارسال نشده است
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {sharedMediaTab === 'pinned' && (
+                  <div className="space-y-2">
+                    {pinnedMsg ? (
+                      <div 
+                        onClick={() => {
+                          scrollToMessage(pinnedMsg.id);
+                          setShowSharedMedia(false);
+                        }}
+                        className="p-3 rounded-2xl bg-white/10 border-r-4 border-pink-500 flex items-center justify-between cursor-pointer"
+                      >
+                        <div className="text-right">
+                          <span className="text-xs font-bold text-pink-300 block">
+                            سنجاق‌شده از {pinnedMsg.sender === user ? 'شما' : partnerName}
+                          </span>
+                          <span className="text-xs text-white/90 mt-1 block">
+                            {pinnedMsg.type === 'text' ? pinnedMsg.text : 'فایل چندرسانه‌ای'}
+                          </span>
+                          <span className="text-[10px] text-white/40 mt-1 block">{pinnedMsg.time}</span>
+                        </div>
+                        <span className="text-xs text-pink-400">برو به پیام 👈</span>
+                      </div>
+                    ) : (
+                      <div className="text-center py-12 text-white/40 text-xs">
+                        در حال حاضر پیامی سنجاق نشده است
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* Fullscreen Photo Viewer from Gallery */}
+        {activeGalleryPhoto && (
+          <div className="fixed inset-0 z-[60] bg-black/95 flex flex-col justify-between p-4 animate-fadeIn">
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-xs text-white/70">
+                ارسال‌شده توسط {activeGalleryPhoto.sender === user ? 'شما' : partnerName} • {activeGalleryPhoto.time}
+              </span>
+              <div className="flex items-center gap-2">
+                <a 
+                  href={activeGalleryPhoto.image || activeGalleryPhoto.text} 
+                  download="photo.jpg"
+                  className="p-2 rounded-full bg-white/10 text-white hover:bg-white/20"
+                  title="دانلود عکس"
+                >
+                  <Download className="w-5 h-5" />
+                </a>
+                <button 
+                  onClick={() => setActiveGalleryPhoto(null)}
+                  className="p-2 rounded-full bg-white/10 text-white hover:bg-white/20"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 flex items-center justify-center p-2">
+              <img 
+                src={activeGalleryPhoto.image || activeGalleryPhoto.text} 
+                alt="Full" 
+                className="max-h-[80vh] max-w-full object-contain rounded-2xl" 
+              />
             </div>
           </div>
         )}
