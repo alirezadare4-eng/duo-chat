@@ -1125,13 +1125,12 @@ export default function App() {
 
   const handleLogin = (e) => {
     e.preventDefault();
-    const phone = loginInput.trim();
-    if (!phone || phone.length < 10) {
-      setLoginError('لطفاً شماره موبایل معتبر خود را وارد کنید.');
-      return;
+    let phone = loginInput.trim();
+    const currentRole = selectedRoleOnLogin;
+    if (!phone) {
+      phone = currentRole === 'alireza' ? '09120000001' : '09120000002';
     }
 
-    const currentRole = selectedRoleOnLogin;
     localStorage.setItem('duo_my_phone', phone);
     localStorage.setItem('duo_user', currentRole);
     setMyPhone(phone);
@@ -1354,7 +1353,11 @@ export default function App() {
   const rtcConfig = {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' }
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      { urls: 'stun:stun.services.mozilla.com' },
+      { urls: 'stun:stun.sipgate.net:3478' }
     ]
   };
 
@@ -1926,36 +1929,52 @@ export default function App() {
   // Safe Voice Recording
   const startRecording = async () => {
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('دستگاه شما از ضبط صدا پشتیبانی نمی‌کند یا دسترسی لازم داده نشده است.');
+        return;
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm') 
-        ? 'audio/webm' 
-        : (MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : '');
+      const types = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/aac',
+        'audio/ogg;codecs=opus',
+        'audio/ogg'
+      ];
+      let mimeType = '';
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported) {
+        mimeType = types.find((t) => MediaRecorder.isTypeSupported(t)) || '';
+      }
 
       mediaRecorderRef.current = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       audioChunksRef.current = [];
 
       mediaRecorderRef.current.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+        if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
       };
 
       mediaRecorderRef.current.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType || 'audio/ogg' });
+        const actualMime = mediaRecorderRef.current?.mimeType || mimeType || 'audio/webm';
+        const audioBlob = new Blob(audioChunksRef.current, { type: actualMime });
         const reader = new FileReader();
         reader.readAsDataURL(audioBlob);
         reader.onloadend = () => {
-          sendMessage('audio', reader.result);
+          if (reader.result) {
+            sendMessage('audio', reader.result);
+          }
         };
         stream.getTracks().forEach((track) => track.stop());
       };
 
-      mediaRecorderRef.current.start();
+      mediaRecorderRef.current.start(250);
       setIsRecording(true);
       setRecordSeconds(0);
       recordIntervalRef.current = setInterval(() => {
         setRecordSeconds((s) => s + 1);
       }, 1000);
     } catch (err) {
-      alert('دسترسی به میکروفون داده نشد.');
+      alert('لطفاً دسترسی به میکروفون را در تنظیمات مرورگر یا برنامه مجاز کنید.');
     }
   };
 
@@ -2698,8 +2717,8 @@ export default function App() {
                               src={m.text} 
                               alt="عکس یادگاری" 
                               loading="lazy"
-                              className="max-h-56 w-full object-cover cursor-pointer"
-                              onClick={() => window.open(m.text, '_blank')}
+                              className="max-h-56 w-full object-cover cursor-pointer hover:opacity-95 transition-opacity"
+                              onClick={() => setActiveGalleryPhoto(m)}
                             />
                           </div>
                         )}
@@ -4571,7 +4590,7 @@ export default function App() {
                     {messages.filter(m => m.type === 'audio').map((audioMsg) => (
                       <div 
                         key={audioMsg.id}
-                        onClick={() => playAudio(audioMsg.id, audioMsg.audio || audioMsg.text)}
+                        onClick={() => toggleAudio(audioMsg.id, audioMsg.audio || audioMsg.text)}
                         className="p-3 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 flex items-center justify-between cursor-pointer transition-colors"
                       >
                         <div className="flex items-center gap-3">

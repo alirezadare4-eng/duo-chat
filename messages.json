@@ -1,0 +1,20 @@
+[
+  {
+    "id": "mwrdx9vi_txmixwe",
+    "sender": "alireza",
+    "text": "سلام عشقم، صبحت بخیر❤️",
+    "time": "08:46",
+    "timestamp": 1795324619070,
+    "type": "text",
+    "seen": false
+  },
+  {
+    "id": "mwrdy5hv_3a573rb",
+    "sender": "alireza",
+    "text": "{\"lat\":35.7219,\"lng\":51.3347,\"accuracy\":15,\"speed\":43,\"battery\":100,\"isLive\":true,\"duration\":60,\"startedAt\":1795324660051}",
+    "time": "08:47",
+    "timestamp": 1795324660051,
+    "type": "live_location",
+    "seen": false
+  }
+]

@@ -1,6 +1,17 @@
 // Image compression utility for fast MQTT and safe localStorage
-export function compressImage(file, maxWidth = 1000, quality = 0.7) {
+export function compressImage(file, maxWidth = 1000, maxHeightOrQuality = 0.75, qualityArg = 0.75) {
   return new Promise((resolve, reject) => {
+    let quality = 0.75;
+    let maxHeight = maxWidth;
+    if (typeof maxHeightOrQuality === 'number') {
+      if (maxHeightOrQuality <= 1) {
+        quality = maxHeightOrQuality;
+      } else {
+        maxHeight = maxHeightOrQuality;
+        quality = typeof qualityArg === 'number' && qualityArg <= 1 ? qualityArg : 0.75;
+      }
+    }
+
     const reader = new FileReader();
     reader.readAsDataURL(file);
     reader.onload = (event) => {
@@ -11,9 +22,10 @@ export function compressImage(file, maxWidth = 1000, quality = 0.7) {
         let width = img.width;
         let height = img.height;
 
-        if (width > maxWidth) {
-          height = Math.round((height * maxWidth) / width);
-          width = maxWidth;
+        if (width > maxWidth || (maxHeight && height > maxHeight)) {
+          const ratio = Math.min(maxWidth / width, maxHeight ? maxHeight / height : 1);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
         }
 
         elem.width = width;
