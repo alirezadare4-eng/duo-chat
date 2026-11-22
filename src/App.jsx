@@ -2417,6 +2417,13 @@ export default function App() {
                     </h1>
                     <span className="text-xs">{partnerProfile.mood || '🥰'}</span>
                     <Heart className="w-3.5 h-3.5 fill-rose-500 text-rose-500 heart-pulse" />
+                    <span 
+                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] ${cloudOnline ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/25' : 'bg-amber-500/15 text-amber-300 border border-amber-500/25'}`}
+                      title={cloudOnline ? 'سرور ابری ۲۴ ساعته فعال است' : 'در حال همگام‌سازی با سرور ابری'}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full ${cloudOnline ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+                      <span>{cloudOnline ? 'ابری ۲۴/۷' : 'اتصال...'}</span>
+                    </span>
                   </div>
 
                   {partnerIsTyping ? (

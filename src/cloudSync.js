@@ -18,7 +18,12 @@ const TOPIC_PROFILE = `${ROOM_CHANNEL}/profile`;
 const TOPIC_TOGETHER = `${ROOM_CHANNEL}/together`;
 const TOPIC_CALL = `${ROOM_CHANNEL}/call`;
 
-const PRIMARY_BROKER = 'wss://broker.emqx.io:8084/mqtt';
+const BROKER_SERVERS = [
+  'wss://broker.emqx.io:8084/mqtt',
+  'wss://broker.hivemq.com:8884/mqtt'
+];
+let currentBrokerIdx = 0;
+let consecutiveFails = 0;
 
 let client = null;
 let eventSource = null;
@@ -220,15 +225,21 @@ function initNtfySSE() {
 }
 
 // ---------------------------------------------------------
-// Connect MQTT Broker (High-speed instant delivery)
+// Connect MQTT Broker (High-speed instant delivery with Auto-Failover)
 // ---------------------------------------------------------
 function initMqtt() {
   if (client && client.connected) return;
 
   const clientId = 'two_souls_' + Math.random().toString(16).substring(2, 10);
+  const targetBroker = BROKER_SERVERS[currentBrokerIdx];
 
   try {
-    client = mqtt.connect(PRIMARY_BROKER, {
+    if (client) {
+      try { client.end(true); } catch (e) {}
+      client = null;
+    }
+
+    client = mqtt.connect(targetBroker, {
       clientId,
       clean: true,
       connectTimeout: 7000,
@@ -237,6 +248,7 @@ function initMqtt() {
     });
 
     client.on('connect', () => {
+      consecutiveFails = 0;
       isConnecting = false;
       if (callbacks.onStatusChange) callbacks.onStatusChange(true);
 
@@ -281,8 +293,13 @@ function initMqtt() {
       } catch (err) {}
     });
 
-    client.on('error', (err) => {
-      // Keep trying primary broker
+    client.on('error', () => {
+      consecutiveFails++;
+      if (consecutiveFails >= 2) {
+        currentBrokerIdx = (currentBrokerIdx + 1) % BROKER_SERVERS.length;
+        consecutiveFails = 0;
+        setTimeout(() => initMqtt(), 2000);
+      }
     });
 
     client.on('offline', () => {
