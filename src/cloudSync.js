@@ -52,6 +52,11 @@ function isEventProcessed(key, windowMs = 5000) {
 function routeEvent(type, payload, isHistorical = false) {
   if (!payload) return;
 
+  // Ephemeral realtime events must NEVER be replayed from history
+  if (isHistorical && (type === 'presence' || type === 'typing' || type === 'nudge' || type === 'call')) {
+    return;
+  }
+
   switch (type) {
     case 'msg': {
       if (!payload.id) return;
@@ -406,8 +411,8 @@ export function sendCloudSeen(seenData) {
 }
 
 export function sendCloudPresence(presenceData) {
-  // Presence: QoS 1 over MQTT, and also notify Ntfy
-  broadcast('presence', TOPIC_PRESENCE, presenceData, { qos: 1, bufferInNtfy: true });
+  // Presence: Instant realtime signal only; never buffer in Ntfy history to avoid ghost online status
+  broadcast('presence', TOPIC_PRESENCE, presenceData, { qos: 0, bufferInNtfy: false });
 }
 
 export function sendCloudProfile(profileData) {

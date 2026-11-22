@@ -85,6 +85,7 @@ const isCapacitor = typeof window !== 'undefined' &&
   (!!window.Capacitor || window.location.protocol === 'capacitor:' || (window.location.protocol === 'https:' && window.location.hostname === 'localhost' && !window.location.port));
 
 const isLocal = typeof window !== 'undefined' && 
+  (window.location.hostname === 'localhost' || window.location.hostname.startsWith('192.168.'));
   !isCapacitor &&
   (window.location.port === '4000' || window.location.hostname.startsWith('192.168.'));
 
@@ -795,13 +796,39 @@ export default function App() {
       },
       onMessage: (msg) => {
         if (msg.sender !== user) {
-          // Partner is actively messaging
-          setPartnerOnline(true);
-          const nowTs = Date.now();
-          setPartnerLastSeen(nowTs);
-          localStorage.setItem('duo_partner_last_seen', nowTs);
-          if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
-          presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 40000);
+          // Partner is actively messaging (live only, not historical catch-up)
+          if (!msg.isHistorical) {
+            setPartnerOnline(true);
+            const nowTs = Date.now();
+            setPartnerLastSeen(nowTs);
+            localStorage.setItem('duo_partner_last_seen', nowTs);
+            if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
+            presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 35000);
+          }
+
+          // If incoming message is live location, update partnerLiveLocation
+          if (msg.type === 'live_location') {
+            try {
+              const locData = typeof msg.text === 'object' ? msg.text : JSON.parse(msg.text);
+              if (locData && locData.lat && locData.lng) {
+                const partnerLoc = {
+                  lat: locData.lat,
+                  lng: locData.lng,
+                  speed: locData.speed || 0,
+                  battery: locData.battery,
+                  accuracy: locData.accuracy || 10,
+                  duration: locData.duration || 60,
+                  startedAt: locData.startedAt || msg.timestamp || Date.now(),
+                  lastUpdate: msg.timestamp || Date.now()
+                };
+                const durationMs = partnerLoc.duration === -1 ? Infinity : partnerLoc.duration * 60 * 1000;
+                if (Date.now() - partnerLoc.startedAt < durationMs) {
+                  setPartnerLiveLocation(partnerLoc);
+                  localStorage.setItem('duo_partner_last_location', JSON.stringify(partnerLoc));
+                }
+              }
+            } catch (e) {}
+          }
 
           const isChatActive = activeTab === 'chat' && document.visibilityState === 'visible';
           const msgToStore = isChatActive ? { ...msg, seen: true } : { ...msg, seen: false };
@@ -913,23 +940,28 @@ export default function App() {
             })
           );
 
-          // Update partner presence
-          setPartnerOnline(true);
+          // Update partner presence ONLY if fresh live event
           const nowTs = timestamp || Date.now();
-          setPartnerLastSeen(nowTs);
-          localStorage.setItem('duo_partner_last_seen', nowTs);
-          if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
-          presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 40000);
+          if (Date.now() - nowTs < 25000) {
+            setPartnerOnline(true);
+            setPartnerLastSeen(nowTs);
+            localStorage.setItem('duo_partner_last_seen', nowTs);
+            if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
+            presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 35000);
+          }
         }
       },
       onPresence: ({ user: fromUser, status, timestamp }) => {
         if (fromUser !== user) {
           const nowTs = timestamp || Date.now();
           if (status === 'online') {
+            // Discard stale presence packets (e.g. from network delays or replays)
+            if (Date.now() - nowTs > 25000) return;
+
             setPartnerOnline((prevWasOnline) => {
               if (!prevWasOnline) {
                 const lastSeenDiff = Date.now() - (partnerLastSeen || 0);
-                if (lastSeenDiff > 30000) {
+                if (lastSeenDiff > 45000) {
                   const pName = user === 'alireza' ? 'فاطمه' : 'علیرضا';
                   setNudgeAlert(`🟢 ${pName} آنلاین شد!`);
                   setTimeout(() => setNudgeAlert(null), 3500);
@@ -941,7 +973,7 @@ export default function App() {
             setPartnerLastSeen(nowTs);
             localStorage.setItem('duo_partner_last_seen', nowTs);
             if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
-            presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 40000);
+            presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 35000);
           } else {
             setPartnerOnline(false);
             setPartnerLastSeen(nowTs);
@@ -1698,7 +1730,15 @@ export default function App() {
       (pos) => {
         setIsSendingLocation(false);
         const { latitude, longitude, speed, accuracy } = pos.coords;
-        setMyLocation({ lat: latitude, lng: longitude });
+        const nowTs = Date.now();
+        const myCoords = {
+          lat: latitude,
+          lng: longitude,
+          accuracy: Math.round(accuracy || 10),
+          speed: speed ? Math.round(speed * 3.6) : 0,
+          battery: batteryPct
+        };
+        setMyLocation(myCoords);
         setMyLiveLocationActive(true);
 
         const liveData = {
@@ -1709,12 +1749,26 @@ export default function App() {
           battery: batteryPct,
           isLive: true,
           duration: durationMinutes,
-          startedAt: Date.now()
+          startedAt: nowTs
         };
 
         sendMessage('live_location', JSON.stringify(liveData));
         setNudgeAlert('اشتراک‌گذاری زنده لوکیشن فعال شد 📡');
         setTimeout(() => setNudgeAlert(null), 3000);
+
+        // Send instant live_loc_update broadcast so partner has coordinates immediately
+        sendCloudTogetherAction({
+          type: 'live_loc_update',
+          user,
+          lat: latitude,
+          lng: longitude,
+          speed: speed ? Math.round(speed * 3.6) : 0,
+          battery: batteryPct,
+          accuracy: Math.round(accuracy || 10),
+          duration: durationMinutes,
+          startedAt: nowTs,
+          timestamp: nowTs
+        });
 
         if (liveWatchIdRef.current) navigator.geolocation.clearWatch(liveWatchIdRef.current);
         liveWatchIdRef.current = navigator.geolocation.watchPosition(
@@ -2546,16 +2600,14 @@ export default function App() {
                 </div>
 
                 <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-                  {partnerLiveLocation && (
-                    <button
-                      onClick={() => setShowLiveMapModal(true)}
-                      className="py-1 px-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-[11px] font-bold flex items-center gap-1 shadow-sm active:scale-95 transition-all"
-                      title="نمایش نقشه و رادار زنده"
-                    >
-                      <Navigation className="w-3 h-3" />
-                      <span>نقشه</span>
-                    </button>
-                  )}
+                  <button
+                    onClick={() => setShowLiveMapModal(true)}
+                    className="py-1 px-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-[11px] font-bold flex items-center gap-1 shadow-sm active:scale-95 transition-all"
+                    title="نمایش نقشه و رادار زنده"
+                  >
+                    <Navigation className="w-3 h-3" />
+                    <span>نقشه</span>
+                  </button>
                   {myLiveLocationActive && !autoLiveLocation && (
                     <button
                       onClick={stopLiveLocation}
@@ -2770,24 +2822,41 @@ export default function App() {
                                 )}
                               </div>
 
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!isMe && isLive) {
+                                    setPartnerLiveLocation(currentCoord);
+                                    try { localStorage.setItem('duo_partner_last_location', JSON.stringify(currentCoord)); } catch(e) {}
+                                  } else if (isMe && isLive) {
+                                    setMyLocation(currentCoord);
+                                  }
+                                  setShowLiveMapModal(true);
+                                }}
+                                className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold text-center shadow-md flex items-center justify-center gap-1.5 active:scale-95 transition-all"
+                              >
+                                <Radio className="w-3.5 h-3.5 animate-pulse" />
+                                <span>{isLive ? 'مشاهده روی رادار زنده 📡' : 'نمایش روی نقشه برنامه 🗺️'}</span>
+                              </button>
+
                               <div className="flex gap-1.5 pt-0.5">
                                 <a 
                                   href={`https://www.google.com/maps?q=${currentCoord.lat},${currentCoord.lng}`}
                                   target="_blank"
                                   rel="noreferrer"
-                                  className="flex-1 py-1.5 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold text-center shadow-md flex items-center justify-center gap-1 active:scale-95 transition-all"
+                                  className="flex-1 py-1.5 px-3 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-medium text-center shadow-sm flex items-center justify-center gap-1 active:scale-95 transition-all"
                                 >
                                   <Navigation className="w-3 h-3" />
-                                  <span>مسیریابی نقشه</span>
+                                  <span>گوگل مپ</span>
                                 </a>
                                 <a 
                                   href={`https://nshn.ir/?lat=${currentCoord.lat}&lng=${currentCoord.lng}`}
                                   target="_blank"
                                   rel="noreferrer"
-                                  className="py-1.5 px-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-medium text-center active:scale-95 transition-all"
+                                  className="py-1.5 px-3 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-medium text-center active:scale-95 transition-all"
                                   title="باز کردن در نشان"
                                 >
-                                  نشان
+                                  نشان 🚗
                                 </a>
                               </div>
                             </div>
@@ -4846,124 +4915,152 @@ export default function App() {
         )}
 
         {/* ================= MODAL: LIVE RADAR & MAP MODAL ================= */}
-        {showLiveMapModal && partnerLiveLocation && (
-          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex flex-col justify-end animate-fadeIn">
-            <div className="bg-[#140d21] border-t border-white/20 rounded-t-[36px] p-5 max-h-[92%] overflow-y-auto lux-scroll shadow-2xl text-right">
-              
-              {/* Header */}
-              <div className="flex items-center justify-between pb-3 border-b border-white/10">
-                <div className="flex items-center gap-2">
-                  <div className="relative flex items-center justify-center w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-xl bg-emerald-400 opacity-40"></span>
-                    <Radio className="w-5 h-5 animate-pulse relative z-10" />
+        {showLiveMapModal && (partnerLiveLocation || myLocation) && (() => {
+          const displayTarget = partnerLiveLocation || myLocation;
+          const isTargetPartner = !!partnerLiveLocation;
+          const targetTitle = isTargetPartner ? `رادار و موقعیت زنده ${partnerName}` : 'موقعیت زنده من (در حال مخابره)';
+          const distance = (myLocation && partnerLiveLocation)
+            ? calculateDistanceKm(myLocation.lat, myLocation.lng, partnerLiveLocation.lat, partnerLiveLocation.lng)
+            : null;
+
+          return (
+            <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex flex-col justify-end animate-fadeIn">
+              <div className="bg-[#140d21] border-t border-white/20 rounded-t-[36px] p-5 max-h-[92%] overflow-y-auto lux-scroll shadow-2xl text-right">
+                
+                {/* Header */}
+                <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex items-center justify-center w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-xl bg-emerald-400 opacity-40"></span>
+                      <Radio className="w-5 h-5 animate-pulse relative z-10" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-sm text-white flex items-center gap-1.5">
+                        <span>{targetTitle}</span>
+                        <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                      </h3>
+                      <p className="text-[10px] text-emerald-300/80">
+                        {isTargetPartner ? 'مخابره زنده و لحظه‌ای ماهواره‌ای 📡' : `در حال اشتراک‌گذاری موقعیت شما با ${partnerName} 📡`}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-bold text-sm text-white flex items-center gap-1.5">
-                      <span>رادار و موقعیت زنده {partnerName}</span>
-                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                    </h3>
-                    <p className="text-[10px] text-emerald-300/80">مخابره زنده و خودکار ماهواره‌ای 📡</p>
+                  <button 
+                    onClick={() => setShowLiveMapModal(false)}
+                    className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Status & Distance Metrics Cards */}
+                <div className="mt-4 grid grid-cols-2 gap-2.5">
+                  {/* Distance / Accuracy Card */}
+                  <div className="p-3 rounded-2xl bg-emerald-950/40 border border-emerald-500/30 flex flex-col justify-center">
+                    <span className="text-[10px] text-emerald-400/80 font-medium">
+                      {distance ? 'فاصله مستقیم تا یکدیگر' : 'دقت موقعیت مکانی'}
+                    </span>
+                    <span className="text-base font-bold text-white mt-0.5">
+                      {distance ? distance : `حدود ${displayTarget.accuracy || 10} متر`}
+                    </span>
+                  </div>
+
+                  {/* Battery & Speed Card */}
+                  <div className="p-3 rounded-2xl bg-white/5 border border-white/10 flex flex-col justify-center">
+                    <div className="flex items-center justify-between text-[10px] text-white/60">
+                      <span>شارژ باتری:</span>
+                      <span className="font-mono text-emerald-400 font-bold">
+                        {displayTarget.battery !== null && displayTarget.battery !== undefined ? `${displayTarget.battery}٪` : 'نامشخص'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-white/60 mt-1">
+                      <span>سرعت حرکت:</span>
+                      <span className="font-mono text-white font-bold">
+                        {displayTarget.speed > 0 ? `${displayTarget.speed} km/h` : 'ساکن'}
+                      </span>
+                    </div>
                   </div>
                 </div>
-                <button 
+
+                {/* Live OpenStreetMap Iframe with Map Container */}
+                <div className="mt-3 rounded-2xl overflow-hidden border border-white/15 h-56 relative shadow-inner bg-slate-900 flex items-center justify-center">
+                  <iframe
+                    title="Live Map"
+                    width="100%"
+                    height="100%"
+                    frameBorder="0"
+                    scrolling="no"
+                    marginHeight="0"
+                    marginWidth="0"
+                    src={`https://www.openstreetmap.org/export/embed.html?bbox=${displayTarget.lng-0.008}%2C${displayTarget.lat-0.008}%2C${displayTarget.lng+0.008}%2C${displayTarget.lat+0.008}&layer=mapnik&marker=${displayTarget.lat}%2C${displayTarget.lng}`}
+                    className="w-full h-full filter contrast-105"
+                  />
+                  <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-white/90 border border-white/10 flex items-center gap-1.5 shadow-sm">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                    <span>{isTargetPartner ? `موقعیت زنده ${partnerName}` : 'موقعیت زنده شما'}</span>
+                  </div>
+                </div>
+
+                {/* Direct Navigation Apps */}
+                <div className="mt-3.5 space-y-2">
+                  <span className="text-[11px] font-bold text-white/70 block">مسیریابی مستقیم و مشاهده در نقشه‌ها:</span>
+                  <div className="grid grid-cols-3 gap-2">
+                    {/* Neshan */}
+                    <a
+                      href={`https://neshan.org/maps/@${displayTarget.lat},${displayTarget.lng},16z`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="py-2.5 px-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex flex-col items-center justify-center gap-1 shadow-md shadow-blue-600/30 active:scale-95 transition-all text-center"
+                    >
+                      <span>مسیریاب نشان 🚗</span>
+                    </a>
+
+                    {/* Balad */}
+                    <a
+                      href={`https://balad.ir/location?latitude=${displayTarget.lat}&longitude=${displayTarget.lng}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="py-2.5 px-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex flex-col items-center justify-center gap-1 shadow-md shadow-emerald-600/30 active:scale-95 transition-all text-center"
+                    >
+                      <span>مسیریاب بلد 🚙</span>
+                    </a>
+
+                    {/* Google Maps */}
+                    <a
+                      href={`https://www.google.com/maps?q=${displayTarget.lat},${displayTarget.lng}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="py-2.5 px-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex flex-col items-center justify-center gap-1 shadow-md shadow-rose-600/30 active:scale-95 transition-all text-center"
+                    >
+                      <span>گوگل مپ 🗺️</span>
+                    </a>
+                  </div>
+                </div>
+
+                {/* If sender is actively sharing, provide quick Stop Sharing button */}
+                {myLiveLocationActive && (
+                  <button
+                    onClick={() => {
+                      stopLiveLocation();
+                      setShowLiveMapModal(false);
+                    }}
+                    className="w-full mt-3 py-2.5 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-xs font-bold active:scale-95 transition-all flex items-center justify-center gap-1.5"
+                  >
+                    <span>🛑 توقف اشتراک‌گذاری لوکیشن زنده من</span>
+                  </button>
+                )}
+
+                {/* Close Button */}
+                <button
                   onClick={() => setShowLiveMapModal(false)}
-                  className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white"
+                  className="w-full mt-2.5 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold active:scale-95 transition-all"
                 >
-                  <X className="w-4 h-4" />
+                  بستن نقشه
                 </button>
+
               </div>
-
-              {/* Status & Distance Metrics Cards */}
-              <div className="mt-4 grid grid-cols-2 gap-2.5">
-                {/* Distance Card */}
-                <div className="p-3 rounded-2xl bg-emerald-950/40 border border-emerald-500/30 flex flex-col justify-center">
-                  <span className="text-[10px] text-emerald-400/80 font-medium">فاصله مستقیم تا شما</span>
-                  <span className="text-base font-bold text-white mt-0.5">
-                    {myLocation 
-                      ? calculateDistanceKm(myLocation.lat, myLocation.lng, partnerLiveLocation.lat, partnerLiveLocation.lng)
-                      : 'در حال محاسبه...'}
-                  </span>
-                </div>
-
-                {/* Battery & Speed Card */}
-                <div className="p-3 rounded-2xl bg-white/5 border border-white/10 flex flex-col justify-center">
-                  <div className="flex items-center justify-between text-[10px] text-white/60">
-                    <span>شارژ باتری:</span>
-                    <span className="font-mono text-emerald-400 font-bold">{partnerLiveLocation.battery ? `${partnerLiveLocation.battery}٪` : 'نامشخص'}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-[10px] text-white/60 mt-1">
-                    <span>سرعت حرکت:</span>
-                    <span className="font-mono text-white font-bold">{partnerLiveLocation.speed > 0 ? `${partnerLiveLocation.speed} km/h` : 'ساکن'}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Live OpenStreetMap Iframe */}
-              <div className="mt-3 rounded-2xl overflow-hidden border border-white/15 h-56 relative shadow-inner">
-                <iframe
-                  title="Live Partner Map"
-                  width="100%"
-                  height="100%"
-                  frameBorder="0"
-                  scrolling="no"
-                  marginHeight="0"
-                  marginWidth="0"
-                  src={`https://www.openstreetmap.org/export/embed.html?bbox=${partnerLiveLocation.lng-0.008}%2C${partnerLiveLocation.lat-0.008}%2C${partnerLiveLocation.lng+0.008}%2C${partnerLiveLocation.lat+0.008}&layer=mapnik&marker=${partnerLiveLocation.lat}%2C${partnerLiveLocation.lng}`}
-                  className="w-full h-full filter contrast-105"
-                />
-                <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md px-2 py-1 rounded-lg text-[9px] text-white/80 border border-white/10 flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-                  <span>موقعیت زنده عشقم</span>
-                </div>
-              </div>
-
-              {/* Direct Navigation Apps */}
-              <div className="mt-3.5 space-y-2">
-                <span className="text-[11px] font-bold text-white/70 block">مسیریابی مستقیم با برنامه‌های نقشه:</span>
-                <div className="grid grid-cols-3 gap-2">
-                  {/* Neshan */}
-                  <a
-                    href={`https://neshan.org/maps/@${partnerLiveLocation.lat},${partnerLiveLocation.lng},16z`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="py-2.5 px-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex flex-col items-center justify-center gap-1 shadow-md shadow-blue-600/30 active:scale-95 transition-all text-center"
-                  >
-                    <span>مسیریاب نشان 🚗</span>
-                  </a>
-
-                  {/* Balad */}
-                  <a
-                    href={`https://balad.ir/location?latitude=${partnerLiveLocation.lat}&longitude=${partnerLiveLocation.lng}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="py-2.5 px-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex flex-col items-center justify-center gap-1 shadow-md shadow-emerald-600/30 active:scale-95 transition-all text-center"
-                  >
-                    <span>مسیریاب بلد 🚙</span>
-                  </a>
-
-                  {/* Google Maps */}
-                  <a
-                    href={`https://www.google.com/maps?q=${partnerLiveLocation.lat},${partnerLiveLocation.lng}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="py-2.5 px-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex flex-col items-center justify-center gap-1 shadow-md shadow-rose-600/30 active:scale-95 transition-all text-center"
-                  >
-                    <span>گوگل مپ 🗺️</span>
-                  </a>
-                </div>
-              </div>
-
-              {/* Close Button */}
-              <button
-                onClick={() => setShowLiveMapModal(false)}
-                className="w-full mt-4 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold active:scale-95 transition-all"
-              >
-                بستن نقشه
-              </button>
-
             </div>
-          </div>
-        )}
+          );
+        })()}
 
       </div>
     </div>
