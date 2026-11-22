@@ -327,7 +327,20 @@ export default function App() {
   const [isSendingLocation, setIsSendingLocation] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [myLiveLocationActive, setMyLiveLocationActive] = useState(false);
-  const [partnerLiveLocation, setPartnerLiveLocation] = useState(null);
+  const [partnerLiveLocation, setPartnerLiveLocation] = useState(() => {
+    try {
+      const saved = localStorage.getItem('duo_partner_last_location');
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      return null;
+    }
+  });
+  const [showLiveMapModal, setShowLiveMapModal] = useState(false);
+  const [autoLiveLocation, setAutoLiveLocation] = useState(() => {
+    return localStorage.getItem('duo_auto_live_location') !== 'false';
+  });
+  const lastBroadcastLocTimeRef = useRef(0);
+  const lastBroadcastLocCoordRef = useRef(null);
   const liveWatchIdRef = useRef(null);
   const liveExpireTimerRef = useRef(null);
 
@@ -1015,14 +1028,18 @@ export default function App() {
           }
         } else if (action.type === 'live_loc_update') {
           if (action.user !== user) {
-            setPartnerLiveLocation({
+            const locData = {
               lat: action.lat,
               lng: action.lng,
               speed: action.speed,
               battery: action.battery,
               accuracy: action.accuracy,
               lastUpdate: action.timestamp || Date.now()
-            });
+            };
+            setPartnerLiveLocation(locData);
+            try {
+              localStorage.setItem('duo_partner_last_location', JSON.stringify(locData));
+            } catch (e) {}
           }
         } else if (action.type === 'live_loc_stop') {
           if (action.user !== user) {
@@ -1757,6 +1774,85 @@ export default function App() {
     setTimeout(() => setNudgeAlert(null), 2500);
   };
 
+  // ----------------------------------------------------
+  // Automatic Ambient 24/7 Live Location (Zero-click sharing)
+  // ----------------------------------------------------
+  useEffect(() => {
+    if (!user || !autoLiveLocation) return;
+    if (typeof window === 'undefined' || !navigator.geolocation) return;
+
+    let autoWatchId = null;
+
+    const handleAutoPos = async (pos) => {
+      const { latitude, longitude, speed, accuracy } = pos.coords;
+      const now = Date.now();
+      setMyLocation({ lat: latitude, lng: longitude });
+      setMyLiveLocationActive(true);
+
+      // Throttle: broadcast at most once every 12 seconds, OR if moved > 25 meters
+      const timeDiff = now - lastBroadcastLocTimeRef.current;
+      let shouldBroadcast = timeDiff > 12000;
+
+      if (!shouldBroadcast && lastBroadcastLocCoordRef.current) {
+        const prev = lastBroadcastLocCoordRef.current;
+        const R = 6371e3;
+        const φ1 = prev.lat * Math.PI / 180;
+        const φ2 = latitude * Math.PI / 180;
+        const Δφ = (latitude - prev.lat) * Math.PI / 180;
+        const Δλ = (longitude - prev.lng) * Math.PI / 180;
+        const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
+        const distMeters = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        if (distMeters > 25) {
+          shouldBroadcast = true;
+        }
+      }
+
+      if (shouldBroadcast) {
+        lastBroadcastLocTimeRef.current = now;
+        lastBroadcastLocCoordRef.current = { lat: latitude, lng: longitude };
+
+        let batt = batteryPct;
+        try {
+          if (navigator.getBattery) {
+            const b = await navigator.getBattery();
+            batt = Math.round(b.level * 100);
+          }
+        } catch(e) {}
+
+        sendCloudTogetherAction({
+          type: 'live_loc_update',
+          user,
+          lat: latitude,
+          lng: longitude,
+          speed: speed ? Math.round(speed * 3.6) : 0,
+          battery: batt,
+          accuracy: Math.round(accuracy || 10),
+          timestamp: now
+        });
+      }
+    };
+
+    try {
+      navigator.geolocation.getCurrentPosition(handleAutoPos, () => {}, {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 10000
+      });
+
+      autoWatchId = navigator.geolocation.watchPosition(handleAutoPos, () => {}, {
+        enableHighAccuracy: true,
+        maximumAge: 5000,
+        timeout: 15000
+      });
+    } catch(e) {}
+
+    return () => {
+      if (autoWatchId && navigator.geolocation) {
+        navigator.geolocation.clearWatch(autoWatchId);
+      }
+    };
+  }, [user, autoLiveLocation, batteryPct]);
+
   const sendNudge = () => {
     setNudgeAlert(`نبض دلتنگی به گوشی ${partnerName} ارسال شد! 💓`);
     setShowHeartBurst(true);
@@ -2411,7 +2507,11 @@ export default function App() {
 
             {/* Persistent Live Location Status Bar (like Telegram) */}
             {(myLiveLocationActive || partnerLiveLocation) && (
-              <div className="mx-3 mt-1.5 p-2.5 rounded-2xl bg-gradient-to-r from-emerald-950/80 via-teal-950/80 to-slate-900/90 border border-emerald-500/40 backdrop-blur-xl shadow-lg flex items-center justify-between z-20 animate-fadeIn">
+              <div 
+                onClick={() => setShowLiveMapModal(true)}
+                className="mx-3 mt-1.5 p-2.5 rounded-2xl bg-gradient-to-r from-emerald-950/80 via-teal-950/80 to-slate-900/90 border border-emerald-500/40 hover:border-emerald-500/70 backdrop-blur-xl shadow-lg flex items-center justify-between z-20 animate-fadeIn cursor-pointer transition-all"
+                title="مشاهده نقشه زنده و مسیریابی"
+              >
                 <div className="flex items-center gap-2.5 overflow-hidden">
                   <div className="relative flex items-center justify-center w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 shrink-0">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-xl bg-emerald-400 opacity-30"></span>
@@ -2421,7 +2521,7 @@ export default function App() {
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-bold text-emerald-300 block">
                         {myLiveLocationActive && partnerLiveLocation 
-                          ? 'اشتراک دوطرفه لوکیشن زنده 📡' 
+                          ? 'موقعیت زنده دوطرفه فعال است 📡' 
                           : myLiveLocationActive 
                             ? 'در حال اشتراک‌گذاری موقعیت شما...' 
                             : 'موقعیت زنده عشقم فعال است 📡'}
@@ -2435,26 +2535,24 @@ export default function App() {
                     )}
                     {partnerLiveLocation && !myLocation && (
                       <span className="text-[10px] text-emerald-300/70 block">
-                        آخرین به‌روزرسانی: چند لحظه پیش
+                        آخرین به‌روزرسانی: چند لحظه پیش (برای مشاهده نقشه لمس کنید)
                       </span>
                     )}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                   {partnerLiveLocation && (
-                    <a
-                      href={`https://www.google.com/maps?q=${partnerLiveLocation.lat},${partnerLiveLocation.lng}`}
-                      target="_blank"
-                      rel="noreferrer"
+                    <button
+                      onClick={() => setShowLiveMapModal(true)}
                       className="py-1 px-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-[11px] font-bold flex items-center gap-1 shadow-sm active:scale-95 transition-all"
-                      title="مسیریابی در نقشه"
+                      title="نمایش نقشه و رادار زنده"
                     >
                       <Navigation className="w-3 h-3" />
                       <span>نقشه</span>
-                    </a>
+                    </button>
                   )}
-                  {myLiveLocationActive && (
+                  {myLiveLocationActive && !autoLiveLocation && (
                     <button
                       onClick={stopLiveLocation}
                       className="py-1 px-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-[10px] font-bold active:scale-95 transition-all"
@@ -4127,6 +4225,32 @@ export default function App() {
                 </details>
               </div>
 
+              {/* Auto 24/7 Live Location Sharing Toggle */}
+              <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between">
+                <div className="text-right">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-white">
+                    <Radio className="w-4 h-4 text-emerald-400" />
+                    <span>موقعیت مکانی زنده خودکار (دو طرفه)</span>
+                  </div>
+                  <p className="text-[10px] text-white/50 mt-0.5">
+                    مشاهده لحظه‌ای مکان و فاصله یکدیگر بدون نیاز به ارسال پیام
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextVal = !autoLiveLocation;
+                    setAutoLiveLocation(nextVal);
+                    localStorage.setItem('duo_auto_live_location', nextVal ? 'true' : 'false');
+                    setNudgeAlert(nextVal ? 'لوکیشن زنده خودکار فعال شد 📡' : 'لوکیشن زنده خودکار خاموش شد');
+                    setTimeout(() => setNudgeAlert(null), 3000);
+                  }}
+                  className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors ${autoLiveLocation ? 'bg-emerald-500 justify-end' : 'bg-white/20 justify-start'}`}
+                >
+                  <div className="bg-white w-4 h-4 rounded-full shadow-md" />
+                </button>
+              </div>
+
               <button 
                 onClick={() => setShowSettings(false)}
                 className="w-full mt-5 py-3 rounded-2xl bg-gradient-to-r from-pink-500 to-purple-600 text-white font-bold text-xs shadow-lg active:scale-95 transition-all"
@@ -4712,6 +4836,126 @@ export default function App() {
                   <span className="text-xs text-white/40 group-hover:text-white transition-colors">📍</span>
                 </button>
               </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* ================= MODAL: LIVE RADAR & MAP MODAL ================= */}
+        {showLiveMapModal && partnerLiveLocation && (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex flex-col justify-end animate-fadeIn">
+            <div className="bg-[#140d21] border-t border-white/20 rounded-t-[36px] p-5 max-h-[92%] overflow-y-auto lux-scroll shadow-2xl text-right">
+              
+              {/* Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  <div className="relative flex items-center justify-center w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-xl bg-emerald-400 opacity-40"></span>
+                    <Radio className="w-5 h-5 animate-pulse relative z-10" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-sm text-white flex items-center gap-1.5">
+                      <span>رادار و موقعیت زنده {partnerName}</span>
+                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    </h3>
+                    <p className="text-[10px] text-emerald-300/80">مخابره زنده و خودکار ماهواره‌ای 📡</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowLiveMapModal(false)}
+                  className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Status & Distance Metrics Cards */}
+              <div className="mt-4 grid grid-cols-2 gap-2.5">
+                {/* Distance Card */}
+                <div className="p-3 rounded-2xl bg-emerald-950/40 border border-emerald-500/30 flex flex-col justify-center">
+                  <span className="text-[10px] text-emerald-400/80 font-medium">فاصله مستقیم تا شما</span>
+                  <span className="text-base font-bold text-white mt-0.5">
+                    {myLocation 
+                      ? calculateDistanceKm(myLocation.lat, myLocation.lng, partnerLiveLocation.lat, partnerLiveLocation.lng)
+                      : 'در حال محاسبه...'}
+                  </span>
+                </div>
+
+                {/* Battery & Speed Card */}
+                <div className="p-3 rounded-2xl bg-white/5 border border-white/10 flex flex-col justify-center">
+                  <div className="flex items-center justify-between text-[10px] text-white/60">
+                    <span>شارژ باتری:</span>
+                    <span className="font-mono text-emerald-400 font-bold">{partnerLiveLocation.battery ? `${partnerLiveLocation.battery}٪` : 'نامشخص'}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] text-white/60 mt-1">
+                    <span>سرعت حرکت:</span>
+                    <span className="font-mono text-white font-bold">{partnerLiveLocation.speed > 0 ? `${partnerLiveLocation.speed} km/h` : 'ساکن'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Live OpenStreetMap Iframe */}
+              <div className="mt-3 rounded-2xl overflow-hidden border border-white/15 h-56 relative shadow-inner">
+                <iframe
+                  title="Live Partner Map"
+                  width="100%"
+                  height="100%"
+                  frameBorder="0"
+                  scrolling="no"
+                  marginHeight="0"
+                  marginWidth="0"
+                  src={`https://www.openstreetmap.org/export/embed.html?bbox=${partnerLiveLocation.lng-0.008}%2C${partnerLiveLocation.lat-0.008}%2C${partnerLiveLocation.lng+0.008}%2C${partnerLiveLocation.lat+0.008}&layer=mapnik&marker=${partnerLiveLocation.lat}%2C${partnerLiveLocation.lng}`}
+                  className="w-full h-full filter contrast-105"
+                />
+                <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md px-2 py-1 rounded-lg text-[9px] text-white/80 border border-white/10 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+                  <span>موقعیت زنده عشقم</span>
+                </div>
+              </div>
+
+              {/* Direct Navigation Apps */}
+              <div className="mt-3.5 space-y-2">
+                <span className="text-[11px] font-bold text-white/70 block">مسیریابی مستقیم با برنامه‌های نقشه:</span>
+                <div className="grid grid-cols-3 gap-2">
+                  {/* Neshan */}
+                  <a
+                    href={`https://neshan.org/maps/@${partnerLiveLocation.lat},${partnerLiveLocation.lng},16z`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="py-2.5 px-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex flex-col items-center justify-center gap-1 shadow-md shadow-blue-600/30 active:scale-95 transition-all text-center"
+                  >
+                    <span>مسیریاب نشان 🚗</span>
+                  </a>
+
+                  {/* Balad */}
+                  <a
+                    href={`https://balad.ir/location?latitude=${partnerLiveLocation.lat}&longitude=${partnerLiveLocation.lng}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="py-2.5 px-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex flex-col items-center justify-center gap-1 shadow-md shadow-emerald-600/30 active:scale-95 transition-all text-center"
+                  >
+                    <span>مسیریاب بلد 🚙</span>
+                  </a>
+
+                  {/* Google Maps */}
+                  <a
+                    href={`https://www.google.com/maps?q=${partnerLiveLocation.lat},${partnerLiveLocation.lng}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="py-2.5 px-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex flex-col items-center justify-center gap-1 shadow-md shadow-rose-600/30 active:scale-95 transition-all text-center"
+                  >
+                    <span>گوگل مپ 🗺️</span>
+                  </a>
+                </div>
+              </div>
+
+              {/* Close Button */}
+              <button
+                onClick={() => setShowLiveMapModal(false)}
+                className="w-full mt-4 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold active:scale-95 transition-all"
+              >
+                بستن نقشه
+              </button>
 
             </div>
           </div>
