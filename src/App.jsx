@@ -81,8 +81,12 @@ import { compressImage, generateMessageId, formatSeconds } from './utils';
 import { getAllFromStore, saveToStore, deleteFromStore, clearStore } from './db';
 import { getSupabaseConfig, saveSupabaseConfig } from './supabase';
 
+const isCapacitor = typeof window !== 'undefined' && 
+  (!!window.Capacitor || window.location.protocol === 'capacitor:' || (window.location.protocol === 'https:' && window.location.hostname === 'localhost' && !window.location.port));
+
 const isLocal = typeof window !== 'undefined' && 
-  (window.location.hostname === 'localhost' || window.location.hostname.startsWith('192.168.'));
+  !isCapacitor &&
+  (window.location.port === '4000' || window.location.hostname.startsWith('192.168.'));
 
 const socket = isLocal ? io(window.location.origin, {
   autoConnect: true,
@@ -1811,7 +1815,7 @@ export default function App() {
         lastBroadcastLocTimeRef.current = now;
         lastBroadcastLocCoordRef.current = { lat: latitude, lng: longitude };
 
-        let batt = batteryPct;
+        let batt = null;
         try {
           if (navigator.getBattery) {
             const b = await navigator.getBattery();
@@ -1851,7 +1855,7 @@ export default function App() {
         navigator.geolocation.clearWatch(autoWatchId);
       }
     };
-  }, [user, autoLiveLocation, batteryPct]);
+  }, [user, autoLiveLocation]);
 
   const sendNudge = () => {
     setNudgeAlert(`نبض دلتنگی به گوشی ${partnerName} ارسال شد! 💓`);
