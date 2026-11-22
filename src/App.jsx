@@ -4065,53 +4065,66 @@ export default function App() {
                 <p className="text-[10px] text-white/40 text-center mt-1">پیام‌های شما در صندوق چندلایه ذخیره شده و هیچ‌وقت پاک نمی‌شوند.</p>
               </div>
 
-              {/* Supabase 24/7 Cloud Database Connection */}
+              {/* 24/7 Free Cloud Sync Status & Optional Supabase */}
               <div className="mt-4 pt-4 border-t border-white/10">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-300">
-                    <Radio className="w-4 h-4 text-emerald-400" />
-                    <span>اتصال کلود اختصاصی ۲۴ ساعته (Supabase)</span>
+                <div className="p-3 rounded-2xl bg-gradient-to-r from-emerald-500/15 to-teal-500/15 border border-emerald-500/30 text-right">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-300">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                      <span>اتصال ابری ۲۴ ساعته (۱۰۰٪ رایگان و فعال)</span>
+                    </div>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30">
+                      ۲۴/۷ فعال
+                    </span>
                   </div>
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${supabaseUrl && supabaseKey ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-pink-500/10 text-pink-300 border border-pink-500/20'}`}>
-                    {supabaseUrl && supabaseKey ? 'پایگاه داده فعال' : 'رله خودکار ابری'}
-                  </span>
+                  <p className="text-[11px] text-white/70 leading-relaxed mt-1">
+                    پیام‌رسانی، تماس و وضعیت آنلاین/آفلاین شما بدون نیاز به هیچ هزینه‌ای و بدون نیاز به روشن بودن کامپیوتر، به صورت ۲۴ ساعته در ۷ روز هفته از طریق رله ابری ایمن متصل است.
+                  </p>
                 </div>
-                <p className="text-[10px] text-white/60 mb-2.5 leading-relaxed">
-                  برنامه به رله خودکار ابری متصل است و پیام‌ها را زنده رد و بدل می‌کند. اگر می‌خواهید پیام‌هایتان برای همیشه روی سرور اختصاصی ذخیره شوند، دو کلید زیر را وارد کنید:
-                </p>
-                <div className="space-y-2">
-                  <input
-                    type="text"
-                    placeholder="Project URL (https://xxxx.supabase.co)"
-                    value={supabaseUrl}
-                    onChange={(e) => setSupabaseUrl(e.target.value)}
-                    className="w-full text-xs p-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:border-emerald-400 focus:outline-none"
-                    dir="ltr"
-                  />
-                  <input
-                    type="password"
-                    placeholder="Project API Key (anon / public)"
-                    value={supabaseKey}
-                    onChange={(e) => setSupabaseKey(e.target.value)}
-                    className="w-full text-xs p-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:border-emerald-400 focus:outline-none"
-                    dir="ltr"
-                  />
-                  <button
-                    onClick={() => {
-                      saveSupabaseConfig(supabaseUrl, supabaseKey);
-                      setSupabaseSaved(true);
-                      setNudgeAlert('تنظیمات پایگاه داده ذخیره شد ✨');
-                      setTimeout(() => {
-                        setSupabaseSaved(false);
-                        setNudgeAlert(null);
-                      }, 3000);
-                    }}
-                    className="w-full py-2 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    <span>{supabaseSaved ? 'ذخیره شد!' : 'ذخیره و فعال‌سازی Supabase'}</span>
-                  </button>
-                </div>
+
+                {/* Optional Supabase for Advanced Users */}
+                <details className="mt-3 text-right group">
+                  <summary className="text-[11px] text-white/50 hover:text-white/80 cursor-pointer list-none flex items-center justify-between py-1 px-2 rounded-xl hover:bg-white/5 transition-all">
+                    <span>تنظیمات پایگاه داده شخصی (اختیاری)</span>
+                    <span className="text-[10px] font-mono text-white/40">⚙️</span>
+                  </summary>
+                  <div className="mt-2 p-3 rounded-2xl bg-white/5 border border-white/10 space-y-2 animate-fadeIn">
+                    <p className="text-[10px] text-white/50 leading-relaxed">
+                      اگر مایلید پیام‌هایتان به جز رله ابری رایگان، روی دیتابیس Supabase شخصی شما هم ثبت شوند:
+                    </p>
+                    <input
+                      type="text"
+                      placeholder="Project URL (https://xxxx.supabase.co)"
+                      value={supabaseUrl}
+                      onChange={(e) => setSupabaseUrl(e.target.value)}
+                      className="w-full text-xs p-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:border-emerald-400 focus:outline-none"
+                      dir="ltr"
+                    />
+                    <input
+                      type="password"
+                      placeholder="Project API Key (anon / public)"
+                      value={supabaseKey}
+                      onChange={(e) => setSupabaseKey(e.target.value)}
+                      className="w-full text-xs p-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:border-emerald-400 focus:outline-none"
+                      dir="ltr"
+                    />
+                    <button
+                      onClick={() => {
+                        saveSupabaseConfig(supabaseUrl, supabaseKey);
+                        setSupabaseSaved(true);
+                        setNudgeAlert('تنظیمات پایگاه داده ذخیره شد ✨');
+                        setTimeout(() => {
+                          setSupabaseSaved(false);
+                          setNudgeAlert(null);
+                        }, 3000);
+                      }}
+                      className="w-full py-2 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>{supabaseSaved ? 'ذخیره شد!' : 'ذخیره دیتابیس شخصی'}</span>
+                    </button>
+                  </div>
+                </details>
               </div>
 
               <button 
