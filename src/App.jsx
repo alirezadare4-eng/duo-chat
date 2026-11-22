@@ -79,6 +79,7 @@ import {
 } from './cloudSync';
 import { compressImage, generateMessageId, formatSeconds } from './utils';
 import { getAllFromStore, saveToStore, deleteFromStore, clearStore } from './db';
+import { getSupabaseConfig, saveSupabaseConfig } from './supabase';
 
 const isLocal = typeof window !== 'undefined' && 
   (window.location.hostname === 'localhost' || window.location.hostname.startsWith('192.168.'));
@@ -196,6 +197,10 @@ export default function App() {
     return saved ? Number(saved) : null;
   });
   const presenceTimeoutRef = useRef(null);
+
+  const [supabaseUrl, setSupabaseUrl] = useState(() => getSupabaseConfig().url);
+  const [supabaseKey, setSupabaseKey] = useState(() => getSupabaseConfig().key);
+  const [supabaseSaved, setSupabaseSaved] = useState(false);
 
   const formatLastSeen = (timestamp) => {
     if (!timestamp) return 'آفلاین';
@@ -779,7 +784,7 @@ export default function App() {
           setPartnerLastSeen(nowTs);
           localStorage.setItem('duo_partner_last_seen', nowTs);
           if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
-          presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 20000);
+          presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 40000);
 
           const isChatActive = activeTab === 'chat' && document.visibilityState === 'visible';
           const msgToStore = isChatActive ? { ...msg, seen: true } : { ...msg, seen: false };
@@ -812,7 +817,7 @@ export default function App() {
           setPartnerLastSeen(nowTs);
           localStorage.setItem('duo_partner_last_seen', nowTs);
           if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
-          presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 20000);
+          presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 40000);
 
           setNudgeAlert(`${sender === 'alireza' ? 'علیرضا' : 'فاطمه'} برات تپش قلب فرستاد! 💓`);
           setShowHeartBurst(true);
@@ -830,7 +835,7 @@ export default function App() {
           setPartnerLastSeen(nowTs);
           localStorage.setItem('duo_partner_last_seen', nowTs);
           if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
-          presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 20000);
+          presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 40000);
 
           if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
           typingTimeoutRef.current = setTimeout(() => {
@@ -897,7 +902,7 @@ export default function App() {
           setPartnerLastSeen(nowTs);
           localStorage.setItem('duo_partner_last_seen', nowTs);
           if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
-          presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 20000);
+          presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 40000);
         }
       },
       onPresence: ({ user: fromUser, status, timestamp }) => {
@@ -906,17 +911,20 @@ export default function App() {
           if (status === 'online') {
             setPartnerOnline((prevWasOnline) => {
               if (!prevWasOnline) {
-                const pName = user === 'alireza' ? 'فاطمه' : 'علیرضا';
-                setNudgeAlert(`🟢 ${pName} آنلاین شد!`);
-                setTimeout(() => setNudgeAlert(null), 3500);
-                notifyUser('وضعیت اتصال 🟢', `${pName} به اینترنت متصل و آنلاین شد!`);
+                const lastSeenDiff = Date.now() - (partnerLastSeen || 0);
+                if (lastSeenDiff > 30000) {
+                  const pName = user === 'alireza' ? 'فاطمه' : 'علیرضا';
+                  setNudgeAlert(`🟢 ${pName} آنلاین شد!`);
+                  setTimeout(() => setNudgeAlert(null), 3500);
+                  notifyUser('وضعیت اتصال 🟢', `${pName} به اینترنت متصل و آنلاین شد!`);
+                }
               }
               return true;
             });
             setPartnerLastSeen(nowTs);
             localStorage.setItem('duo_partner_last_seen', nowTs);
             if (presenceTimeoutRef.current) clearTimeout(presenceTimeoutRef.current);
-            presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 20000);
+            presenceTimeoutRef.current = setTimeout(() => setPartnerOnline(false), 40000);
           } else {
             setPartnerOnline(false);
             setPartnerLastSeen(nowTs);
@@ -1123,6 +1131,7 @@ export default function App() {
       sender: user,
       text: textToSend,
       time: timeStr,
+      timestamp: Date.now(),
       type,
       seen: false, // Single tick until partner sees it
       ...(replyData ? { replyTo: replyData } : {}),
@@ -1162,33 +1171,46 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
 
+    let visOfflineTimeout = null;
+
     sendCloudPresence({ user, status: 'online', timestamp: Date.now() });
     markIncomingAsSeen();
 
     const handleVis = () => {
       if (document.visibilityState === 'visible') {
+        if (visOfflineTimeout) {
+          clearTimeout(visOfflineTimeout);
+          visOfflineTimeout = null;
+        }
         sendCloudPresence({ user, status: 'online', timestamp: Date.now() });
         markIncomingAsSeen();
       } else {
-        sendCloudPresence({ user, status: 'offline', timestamp: Date.now() });
+        // Debounce offline notification: wait 45s so quick app switches or dimming doesn't flip status
+        if (visOfflineTimeout) clearTimeout(visOfflineTimeout);
+        visOfflineTimeout = setTimeout(() => {
+          sendCloudPresence({ user, status: 'offline', timestamp: Date.now() });
+        }, 45000);
       }
     };
 
     const handleUnload = () => {
+      if (visOfflineTimeout) clearTimeout(visOfflineTimeout);
       sendCloudPresence({ user, status: 'offline', timestamp: Date.now() });
     };
 
     document.addEventListener('visibilitychange', handleVis);
     window.addEventListener('beforeunload', handleUnload);
 
+    // Heartbeat every 12s so it is safely within the 40s partner timeout window
     const hbInterval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         sendCloudPresence({ user, status: 'online', timestamp: Date.now() });
       }
-    }, 25000);
+    }, 12000);
 
     return () => {
       clearInterval(hbInterval);
+      if (visOfflineTimeout) clearTimeout(visOfflineTimeout);
       document.removeEventListener('visibilitychange', handleVis);
       window.removeEventListener('beforeunload', handleUnload);
     };
@@ -4041,6 +4063,55 @@ export default function App() {
                   <span>پشتیبان‌گیری و دانلود تاریخچه پیام‌ها 💾</span>
                 </button>
                 <p className="text-[10px] text-white/40 text-center mt-1">پیام‌های شما در صندوق چندلایه ذخیره شده و هیچ‌وقت پاک نمی‌شوند.</p>
+              </div>
+
+              {/* Supabase 24/7 Cloud Database Connection */}
+              <div className="mt-4 pt-4 border-t border-white/10">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-300">
+                    <Radio className="w-4 h-4 text-emerald-400" />
+                    <span>اتصال کلود اختصاصی ۲۴ ساعته (Supabase)</span>
+                  </div>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${supabaseUrl && supabaseKey ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-pink-500/10 text-pink-300 border border-pink-500/20'}`}>
+                    {supabaseUrl && supabaseKey ? 'پایگاه داده فعال' : 'رله خودکار ابری'}
+                  </span>
+                </div>
+                <p className="text-[10px] text-white/60 mb-2.5 leading-relaxed">
+                  برنامه به رله خودکار ابری متصل است و پیام‌ها را زنده رد و بدل می‌کند. اگر می‌خواهید پیام‌هایتان برای همیشه روی سرور اختصاصی ذخیره شوند، دو کلید زیر را وارد کنید:
+                </p>
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    placeholder="Project URL (https://xxxx.supabase.co)"
+                    value={supabaseUrl}
+                    onChange={(e) => setSupabaseUrl(e.target.value)}
+                    className="w-full text-xs p-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:border-emerald-400 focus:outline-none"
+                    dir="ltr"
+                  />
+                  <input
+                    type="password"
+                    placeholder="Project API Key (anon / public)"
+                    value={supabaseKey}
+                    onChange={(e) => setSupabaseKey(e.target.value)}
+                    className="w-full text-xs p-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:border-emerald-400 focus:outline-none"
+                    dir="ltr"
+                  />
+                  <button
+                    onClick={() => {
+                      saveSupabaseConfig(supabaseUrl, supabaseKey);
+                      setSupabaseSaved(true);
+                      setNudgeAlert('تنظیمات پایگاه داده ذخیره شد ✨');
+                      setTimeout(() => {
+                        setSupabaseSaved(false);
+                        setNudgeAlert(null);
+                      }, 3000);
+                    }}
+                    className="w-full py-2 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>{supabaseSaved ? 'ذخیره شد!' : 'ذخیره و فعال‌سازی Supabase'}</span>
+                  </button>
+                </div>
               </div>
 
               <button 

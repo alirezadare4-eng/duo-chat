@@ -7,6 +7,17 @@ export function getSupabaseConfig() {
   return { url, key };
 }
 
+export function saveSupabaseConfig(url, key) {
+  if (url) localStorage.setItem('duo_supabase_url', url.trim());
+  else localStorage.removeItem('duo_supabase_url');
+
+  if (key) localStorage.setItem('duo_supabase_key', key.trim());
+  else localStorage.removeItem('duo_supabase_key');
+
+  supabaseInstance = null;
+  return getSupabase();
+}
+
 let supabaseInstance = null;
 
 export function getSupabase() {

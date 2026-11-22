@@ -1,7 +1,10 @@
-import Gun from 'gun/gun';
 import mqtt from 'mqtt';
+import { getSupabase } from './supabase';
 
 const ROOM_CHANNEL = 'duo_chat_v1_room_alireza_fatemeh_sec9981';
+const NTFY_TOPIC = ROOM_CHANNEL;
+const NTFY_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
+
 const TOPIC_MSG = `${ROOM_CHANNEL}/msg`;
 const TOPIC_NUDGE = `${ROOM_CHANNEL}/nudge`;
 const TOPIC_STATUS = `${ROOM_CHANNEL}/status`;
@@ -15,335 +18,406 @@ const TOPIC_PROFILE = `${ROOM_CHANNEL}/profile`;
 const TOPIC_TOGETHER = `${ROOM_CHANNEL}/together`;
 const TOPIC_CALL = `${ROOM_CHANNEL}/call`;
 
-// High-speed, low-overhead cloud peers
-const GUN_PEERS = [
-  'https://gun-manhattan.herokuapp.com/gun',
-  'https://relay.peer.ooo/gun'
-];
-
-let gunInstance = null;
-let gunRoom = null;
-
-function getGunRoom() {
-  if (!gunRoom) {
-    try {
-      gunInstance = Gun({
-        peers: GUN_PEERS,
-        radisk: false,
-        localStorage: false // Don't block localStorage, IndexedDB is handled in db.js
-      });
-      gunRoom = gunInstance.get(ROOM_CHANNEL);
-    } catch (e) {
-      console.warn('Gun init error:', e);
-    }
-  }
-  return gunRoom;
-}
-
-const BROKERS = [
-  'wss://broker.emqx.io:8084/mqtt',
-  'wss://broker.hivemq.com:8884/mqtt'
-];
+const PRIMARY_BROKER = 'wss://broker.emqx.io:8084/mqtt';
 
 let client = null;
-let currentBrokerIdx = 0;
+let eventSource = null;
 let isConnecting = false;
+let callbacks = {};
 const processedMsgIds = new Set();
-const processedMemIds = new Set();
-const processedTrackIds = new Set();
+const processedEvents = new Map(); // key -> timestamp
 
-export function initCloudSync({ 
-  onMessage, 
-  onNudge, 
-  onTyping, 
-  onMemory, 
-  onPlaylist, 
-  onDeleteMessage, 
-  onSeen,
-  onPresence,
-  onProfile,
-  onTogetherAction,
-  onCall,
-  onStatusChange 
-}) {
-  // 1. Initial Cloud Database Catch-up (using .once so it doesn't burn CPU in background)
-  const room = getGunRoom();
-  if (room) {
-    if (onStatusChange) onStatusChange(true);
+// Outbound queue for offline resilience
+const outboxQueue = [];
 
-    // Load stored profiles on startup
-    room.get('profiles').map().once((jsonStr) => {
-      if (!jsonStr) return;
-      try {
-        const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
-        if (data && onProfile) onProfile(data);
-      } catch (e) {}
-    });
-
-    // Load stored messages once on startup
-    room.get('messages').map().once((jsonStr) => {
-      if (!jsonStr) return;
-      try {
-        const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
-        if (data && data.id) {
-          if (processedMsgIds.has(data.id)) return;
-          processedMsgIds.add(data.id);
-          if (onMessage) onMessage({ ...data, isHistorical: true });
-        }
-      } catch (e) {}
-    });
-
-    // Load memories once on startup
-    room.get('memories').map().once((jsonStr) => {
-      if (!jsonStr) return;
-      try {
-        const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
-        if (data && data.id) {
-          if (processedMemIds.has(data.id)) return;
-          processedMemIds.add(data.id);
-          if (onMemory) onMemory(data);
-        }
-      } catch (e) {}
-    });
-
-    // Load playlist once on startup
-    room.get('playlist').map().once((jsonStr) => {
-      if (!jsonStr) return;
-      try {
-        const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
-        if (data && data.id) {
-          if (processedTrackIds.has(data.id)) return;
-          processedTrackIds.add(data.id);
-          if (onPlaylist) onPlaylist(data);
-        }
-      } catch (e) {}
-    });
+function isEventProcessed(key, windowMs = 5000) {
+  const now = Date.now();
+  if (processedEvents.has(key)) {
+    const prev = processedEvents.get(key);
+    if (now - prev < windowMs) return true;
   }
+  processedEvents.set(key, now);
+  // Clean old entries
+  if (processedEvents.size > 1000) {
+    for (const [k, ts] of processedEvents.entries()) {
+      if (now - ts > 30000) processedEvents.delete(k);
+    }
+  }
+  return false;
+}
 
-  // 2. Ultra-Lightweight, 0% CPU MQTT for real-time events
+// ---------------------------------------------------------
+// Dispatches incoming events to App.jsx with deduplication
+// ---------------------------------------------------------
+function routeEvent(type, payload, isHistorical = false) {
+  if (!payload) return;
+
+  switch (type) {
+    case 'msg': {
+      if (!payload.id) return;
+      if (processedMsgIds.has(payload.id)) return;
+      processedMsgIds.add(payload.id);
+      if (callbacks.onMessage) callbacks.onMessage({ ...payload, isHistorical });
+      break;
+    }
+    case 'nudge': {
+      const key = `nudge_${payload.sender}_${Math.floor(Date.now() / 2000)}`;
+      if (isEventProcessed(key, 2000)) return;
+      if (callbacks.onNudge) callbacks.onNudge(payload);
+      break;
+    }
+    case 'typing': {
+      if (callbacks.onTyping) callbacks.onTyping(payload);
+      break;
+    }
+    case 'memory': {
+      if (payload.id && processedMsgIds.has('mem_' + payload.id)) return;
+      if (payload.id) processedMsgIds.add('mem_' + payload.id);
+      if (callbacks.onMemory) callbacks.onMemory(payload);
+      break;
+    }
+    case 'playlist': {
+      if (payload.id && processedMsgIds.has('pl_' + payload.id)) return;
+      if (payload.id) processedMsgIds.add('pl_' + payload.id);
+      if (callbacks.onPlaylist) callbacks.onPlaylist(payload);
+      break;
+    }
+    case 'delete': {
+      if (callbacks.onDeleteMessage) callbacks.onDeleteMessage(payload);
+      break;
+    }
+    case 'seen': {
+      const key = `seen_${payload.reader}_${JSON.stringify(payload.messageIds)}_${Math.floor(Date.now() / 1500)}`;
+      if (isEventProcessed(key, 1500)) return;
+      if (callbacks.onSeen) callbacks.onSeen(payload);
+      break;
+    }
+    case 'presence': {
+      if (callbacks.onPresence) callbacks.onPresence(payload);
+      break;
+    }
+    case 'profile': {
+      if (callbacks.onProfile) callbacks.onProfile(payload);
+      break;
+    }
+    case 'together': {
+      if (callbacks.onTogetherAction) callbacks.onTogetherAction(payload);
+      break;
+    }
+    case 'call': {
+      if (callbacks.onCall) callbacks.onCall(payload);
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+// ---------------------------------------------------------
+// Catch up on missed messages from Ntfy buffer (last 12h)
+// ---------------------------------------------------------
+async function pollNtfyHistory() {
+  try {
+    const res = await fetch(`${NTFY_URL}/json?poll=1&since=12h`);
+    if (!res.ok) return;
+    const text = await res.text();
+    const lines = text.trim().split('\n');
+    for (const line of lines) {
+      if (!line) continue;
+      try {
+        const item = JSON.parse(line);
+        if (item.event === 'message' && item.message) {
+          const parsed = JSON.parse(item.message);
+          if (parsed && parsed.event && parsed.data) {
+            routeEvent(parsed.event, parsed.data, true);
+          }
+        }
+      } catch (err) {}
+    }
+  } catch (err) {
+    // Network offline or polling failed, non-blocking
+  }
+}
+
+// ---------------------------------------------------------
+// Catch up from Supabase (if user enabled it)
+// ---------------------------------------------------------
+async function syncFromSupabase() {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { data: msgs, error } = await supabase
+      .from('messages')
+      .select('*')
+      .order('created_at', { ascending: true })
+      .limit(300);
+
+    if (!error && Array.isArray(msgs)) {
+      for (const row of msgs) {
+        if (row && row.id && !processedMsgIds.has(row.id)) {
+          processedMsgIds.add(row.id);
+          const fullMsg = {
+            id: row.id,
+            sender: row.sender,
+            text: row.text,
+            type: row.type || 'text',
+            time: row.time,
+            timestamp: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+            seen: row.seen || false,
+            ...(row.meta || {})
+          };
+          if (callbacks.onMessage) callbacks.onMessage({ ...fullMsg, isHistorical: true });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Supabase catch-up error:', err);
+  }
+}
+
+// ---------------------------------------------------------
+// Connect Ntfy SSE Stream (Port 443 HTTPS - Ultra-Reliable)
+// ---------------------------------------------------------
+function initNtfySSE() {
+  if (typeof window === 'undefined' || typeof window.EventSource === 'undefined') return;
+
+  try {
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+
+    eventSource = new EventSource(`${NTFY_URL}/sse`);
+
+    eventSource.onopen = () => {
+      if (callbacks.onStatusChange) callbacks.onStatusChange(true);
+    };
+
+    eventSource.onmessage = (e) => {
+      if (!e || !e.data) return;
+      try {
+        const item = JSON.parse(e.data);
+        if (item.event === 'message' && item.message) {
+          const parsed = JSON.parse(item.message);
+          if (parsed && parsed.event && parsed.data) {
+            routeEvent(parsed.event, parsed.data, false);
+          }
+        }
+      } catch (err) {}
+    };
+
+    eventSource.onerror = () => {
+      // EventSource auto-retries in browsers
+    };
+  } catch (e) {
+    console.warn('Ntfy SSE error:', e);
+  }
+}
+
+// ---------------------------------------------------------
+// Connect MQTT Broker (High-speed instant delivery)
+// ---------------------------------------------------------
+function initMqtt() {
+  if (client && client.connected) return;
+
+  const clientId = 'two_souls_' + Math.random().toString(16).substring(2, 10);
+
+  try {
+    client = mqtt.connect(PRIMARY_BROKER, {
+      clientId,
+      clean: true,
+      connectTimeout: 7000,
+      reconnectPeriod: 3000,
+      keepalive: 45,
+    });
+
+    client.on('connect', () => {
+      isConnecting = false;
+      if (callbacks.onStatusChange) callbacks.onStatusChange(true);
+
+      client.subscribe([
+        TOPIC_MSG,
+        TOPIC_NUDGE,
+        TOPIC_STATUS,
+        TOPIC_TYPING,
+        TOPIC_MEMORY,
+        TOPIC_PLAYLIST,
+        TOPIC_DELETE,
+        TOPIC_SEEN,
+        TOPIC_PRESENCE,
+        TOPIC_PROFILE,
+        TOPIC_TOGETHER,
+        TOPIC_CALL
+      ], { qos: 1 });
+
+      // Flush outbox queue
+      while (outboxQueue.length > 0) {
+        const item = outboxQueue.shift();
+        if (item && item.topic && item.payload) {
+          client.publish(item.topic, item.payload, { qos: 1 });
+        }
+      }
+    });
+
+    client.on('message', (topic, payload) => {
+      try {
+        const data = JSON.parse(payload.toString());
+        if (topic === TOPIC_MSG) routeEvent('msg', data, false);
+        else if (topic === TOPIC_NUDGE) routeEvent('nudge', data, false);
+        else if (topic === TOPIC_TYPING) routeEvent('typing', data, false);
+        else if (topic === TOPIC_MEMORY) routeEvent('memory', data, false);
+        else if (topic === TOPIC_PLAYLIST) routeEvent('playlist', data, false);
+        else if (topic === TOPIC_DELETE) routeEvent('delete', data, false);
+        else if (topic === TOPIC_SEEN) routeEvent('seen', data, false);
+        else if (topic === TOPIC_PRESENCE) routeEvent('presence', data, false);
+        else if (topic === TOPIC_PROFILE) routeEvent('profile', data, false);
+        else if (topic === TOPIC_TOGETHER) routeEvent('together', data, false);
+        else if (topic === TOPIC_CALL) routeEvent('call', data, false);
+      } catch (err) {}
+    });
+
+    client.on('error', (err) => {
+      // Keep trying primary broker
+    });
+
+    client.on('offline', () => {
+      // Ntfy SSE stays active as fallback
+    });
+  } catch (err) {
+    console.warn('MQTT init error:', err);
+  }
+}
+
+// ---------------------------------------------------------
+// Broadcaster: Broadcasts across MQTT + Ntfy + Supabase
+// ---------------------------------------------------------
+async function broadcast(eventType, mqttTopic, data, options = { qos: 1, bufferInNtfy: true }) {
+  const jsonStr = JSON.stringify(data);
+
+  // 1. Send via MQTT if connected, or queue for when reconnecting
   if (client && client.connected) {
-    if (onStatusChange) onStatusChange(true);
-    return client;
+    client.publish(mqttTopic, jsonStr, { qos: options.qos ?? 1 });
+  } else if (eventType === 'msg' || eventType === 'memory' || eventType === 'playlist' || eventType === 'seen') {
+    outboxQueue.push({ topic: mqttTopic, payload: jsonStr });
   }
 
-  function connectToBroker(index) {
-    if (isConnecting) return;
-    isConnecting = true;
-
-    const brokerUrl = BROKERS[index % BROKERS.length];
-    const clientId = 'two_souls_' + Math.random().toString(16).substring(2, 10);
-
+  // 2. Send via Ntfy HTTP relay (always over HTTPS Port 443)
+  if (options.bufferInNtfy !== false) {
     try {
+      fetch(NTFY_URL, {
+        method: 'POST',
+        body: JSON.stringify({ event: eventType, data })
+      }).catch(() => {});
+    } catch (e) {}
+  }
+
+  // 3. Send via Supabase if configured
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      if (eventType === 'msg' && data.id) {
+        supabase.from('messages').upsert({
+          id: data.id,
+          sender: data.sender,
+          text: data.text || '',
+          type: data.type || 'text',
+          time: data.time || '',
+          seen: !!data.seen
+        }).catch(() => {});
+      }
+    } catch (e) {}
+  }
+}
+
+// ---------------------------------------------------------
+// Main Initializer
+// ---------------------------------------------------------
+export function initCloudSync(cbs) {
+  callbacks = cbs || {};
+
+  // 1. Initial catch-up from Ntfy buffer & Supabase
+  pollNtfyHistory();
+  syncFromSupabase();
+
+  // 2. Start Ntfy Realtime SSE (HTTPS 443)
+  initNtfySSE();
+
+  // 3. Start MQTT (WebSocket)
+  initMqtt();
+
+  // Periodic resync check every 45s to ensure nothing was missed
+  const intervalId = setInterval(() => {
+    pollNtfyHistory();
+  }, 45000);
+
+  return {
+    disconnect: () => {
+      clearInterval(intervalId);
       if (client) {
         try { client.end(true); } catch (e) {}
       }
-
-      client = mqtt.connect(brokerUrl, {
-        clientId,
-        clean: true,
-        connectTimeout: 8000,
-        reconnectPeriod: 5000,
-        keepalive: 60,
-      });
-
-      client.on('connect', () => {
-        isConnecting = false;
-        console.log(`✨ Connected to Real-time Broker [${brokerUrl}]`);
-        if (onStatusChange) onStatusChange(true);
-
-        client.subscribe([
-          TOPIC_MSG, 
-          TOPIC_NUDGE, 
-          TOPIC_STATUS, 
-          TOPIC_TYPING,
-          TOPIC_MEMORY,
-          TOPIC_PLAYLIST,
-          TOPIC_DELETE,
-          TOPIC_SEEN,
-          TOPIC_PRESENCE,
-          TOPIC_PROFILE,
-          TOPIC_TOGETHER,
-          TOPIC_CALL
-        ], (err) => {
-          if (err) console.error('Sub error:', err);
-        });
-      });
-
-      client.on('message', (topic, payload) => {
-        try {
-          const data = JSON.parse(payload.toString());
-          if (topic === TOPIC_MSG && onMessage) {
-            if (data && data.id) {
-              if (processedMsgIds.has(data.id)) return;
-              processedMsgIds.add(data.id);
-              onMessage({ ...data, isHistorical: false });
-            }
-          } else if (topic === TOPIC_NUDGE && onNudge) {
-            onNudge(data);
-          } else if (topic === TOPIC_TYPING && onTyping) {
-            onTyping(data);
-          } else if (topic === TOPIC_MEMORY && onMemory) {
-            if (data && data.id && !processedMemIds.has(data.id)) {
-              processedMemIds.add(data.id);
-              onMemory(data);
-            }
-          } else if (topic === TOPIC_PLAYLIST && onPlaylist) {
-            if (data && data.id && !processedTrackIds.has(data.id)) {
-              processedTrackIds.add(data.id);
-              onPlaylist(data);
-            }
-          } else if (topic === TOPIC_DELETE && onDeleteMessage) {
-            onDeleteMessage(data);
-          } else if (topic === TOPIC_SEEN && onSeen) {
-            onSeen(data);
-          } else if (topic === TOPIC_PRESENCE && onPresence) {
-            onPresence(data);
-          } else if (topic === TOPIC_PROFILE && onProfile) {
-            onProfile(data);
-          } else if (topic === TOPIC_TOGETHER && onTogetherAction) {
-            onTogetherAction(data);
-          } else if (topic === TOPIC_CALL && onCall) {
-            onCall(data);
-          }
-        } catch (e) {
-          console.error('MQTT parse error:', e);
-        }
-      });
-
-      client.on('error', () => {
-        isConnecting = false;
-        currentBrokerIdx = (currentBrokerIdx + 1) % BROKERS.length;
-        setTimeout(() => connectToBroker(currentBrokerIdx), 5000);
-      });
-
-      client.on('close', () => {
-        isConnecting = false;
-      });
-
-      client.on('offline', () => {
-        if (!room && onStatusChange) onStatusChange(false);
-      });
-    } catch (err) {
-      isConnecting = false;
-      console.error('Broker connect error:', err);
+      if (eventSource) {
+        try { eventSource.close(); } catch (e) {}
+      }
     }
-  }
-
-  connectToBroker(currentBrokerIdx);
-  return client;
+  };
 }
 
+// ---------------------------------------------------------
+// Exported Action Methods
+// ---------------------------------------------------------
 export function sendCloudMessage(messageObj) {
   if (messageObj && messageObj.id) {
     processedMsgIds.add(messageObj.id);
   }
-  // 1. Store in Cloud Database
-  const room = getGunRoom();
-  if (room && messageObj && messageObj.id) {
-    try {
-      room.get('messages').get(messageObj.id).put(JSON.stringify(messageObj));
-    } catch (e) {}
-  }
-
-  // 2. Broadcast via MQTT (instant <50ms delivery)
-  if (client && client.connected) {
-    client.publish(TOPIC_MSG, JSON.stringify(messageObj), { qos: 1 });
-  }
+  broadcast('msg', TOPIC_MSG, messageObj, { qos: 1, bufferInNtfy: true });
 }
 
 export function sendCloudNudge(sender) {
-  if (client && client.connected) {
-    client.publish(TOPIC_NUDGE, JSON.stringify({ sender }), { qos: 1 });
-  }
+  broadcast('nudge', TOPIC_NUDGE, { sender }, { qos: 1, bufferInNtfy: true });
 }
 
 export function sendCloudTyping(sender) {
-  if (client && client.connected) {
-    client.publish(TOPIC_TYPING, JSON.stringify({ sender }), { qos: 0 });
-  }
+  // Typing is transient, no need to buffer in Ntfy
+  broadcast('typing', TOPIC_TYPING, { sender }, { qos: 0, bufferInNtfy: false });
 }
 
 export function sendCloudMemory(memoryObj) {
   if (memoryObj && memoryObj.id) {
-    processedMemIds.add(memoryObj.id);
+    processedMsgIds.add('mem_' + memoryObj.id);
   }
-  const room = getGunRoom();
-  if (room && memoryObj && memoryObj.id) {
-    try {
-      room.get('memories').get(memoryObj.id).put(JSON.stringify(memoryObj));
-    } catch (e) {}
-  }
-  if (client && client.connected) {
-    client.publish(TOPIC_MEMORY, JSON.stringify(memoryObj), { qos: 1 });
-  }
+  broadcast('memory', TOPIC_MEMORY, memoryObj, { qos: 1, bufferInNtfy: true });
 }
 
 export function sendCloudPlaylist(trackObj) {
   if (trackObj && trackObj.id) {
-    processedTrackIds.add(trackObj.id);
+    processedMsgIds.add('pl_' + trackObj.id);
   }
-  const room = getGunRoom();
-  if (room && trackObj && trackObj.id) {
-    try {
-      room.get('playlist').get(trackObj.id).put(JSON.stringify(trackObj));
-    } catch (e) {}
-  }
-  if (client && client.connected) {
-    client.publish(TOPIC_PLAYLIST, JSON.stringify(trackObj), { qos: 1 });
-  }
+  broadcast('playlist', TOPIC_PLAYLIST, trackObj, { qos: 1, bufferInNtfy: true });
 }
 
 export function sendCloudDelete(messageIdOrData) {
   const payload = typeof messageIdOrData === 'object' ? messageIdOrData : { id: messageIdOrData };
-  const room = getGunRoom();
-  if (room && payload.id) {
-    try {
-      room.get('messages').get(payload.id).put(null);
-    } catch (e) {}
-  }
-  if (client && client.connected) {
-    client.publish(TOPIC_DELETE, JSON.stringify(payload), { qos: 1 });
-  }
+  broadcast('delete', TOPIC_DELETE, payload, { qos: 1, bufferInNtfy: true });
 }
 
 export function sendCloudSeen(seenData) {
-  if (client && client.connected) {
-    client.publish(TOPIC_SEEN, JSON.stringify(seenData), { qos: 1 });
-  }
+  broadcast('seen', TOPIC_SEEN, seenData, { qos: 1, bufferInNtfy: true });
 }
 
 export function sendCloudPresence(presenceData) {
-  if (client && client.connected) {
-    client.publish(TOPIC_PRESENCE, JSON.stringify(presenceData), { qos: 0 });
-  }
+  // Presence: QoS 1 over MQTT, and also notify Ntfy
+  broadcast('presence', TOPIC_PRESENCE, presenceData, { qos: 1, bufferInNtfy: true });
 }
 
 export function sendCloudProfile(profileData) {
-  const room = getGunRoom();
-  if (room && profileData && profileData.user) {
-    try {
-      room.get('profiles').get(profileData.user).put(JSON.stringify(profileData));
-    } catch (e) {}
-  }
-  if (client && client.connected) {
-    client.publish(TOPIC_PROFILE, JSON.stringify(profileData), { qos: 1 });
-  }
+  broadcast('profile', TOPIC_PROFILE, profileData, { qos: 1, bufferInNtfy: true });
 }
 
 export function sendCloudTogetherAction(actionData) {
-  const room = getGunRoom();
-  if (room && actionData && actionData.type) {
-    try {
-      room.get('together').get(actionData.type).put(JSON.stringify(actionData));
-    } catch (e) {}
-  }
-  if (client && client.connected) {
-    client.publish(TOPIC_TOGETHER, JSON.stringify(actionData), { qos: 1 });
-  }
+  broadcast('together', TOPIC_TOGETHER, actionData, { qos: 1, bufferInNtfy: true });
 }
 
 export function sendCloudCall(callData) {
-  if (client && client.connected) {
-    client.publish(TOPIC_CALL, JSON.stringify(callData), { qos: 1 });
-  }
+  broadcast('call', TOPIC_CALL, callData, { qos: 1, bufferInNtfy: false });
 }
